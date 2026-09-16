@@ -1,6 +1,10 @@
 # Conversational Operations Runtime
 
-A typed business-action protocol for AI agents. Turns model tool requests into policy-checked, approval-gated, idempotent, verifiable operational effects — with explicit unknown-outcome handling and provider reconciliation.
+**The missing governance and safety layer between AI agents and critical business systems.**
+
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
+[![Status](https://img.shields.io/badge/Status-Phase_4_Complete-green.svg)](#status)
 
 ---
 
@@ -9,6 +13,13 @@ A typed business-action protocol for AI agents. Turns model tool requests into p
 AI agents that modify business systems (payroll, booking, HR, ERP) need a layer between the model and the provider that handles: argument validation, policy evaluation, human approval, idempotent commit, unknown outcomes, and audit. Most teams build this for every integration point, duplicated and inconsistent.
 
 This runtime is that layer, built once, as a protocol, separate from the model.
+
+## Key capabilities
+
+- **Policy-gated execution** — intercept model tool calls and route high-risk operations to human approval before any side effect occurs
+- **Stale approval detection** — recheck provider resource state right before dispatch; if the record changed since the agent prepared the proposal, the approval is invalidated and the human must re-review
+- **First-class unknown state** — `command.status = unknown` is a durable, recoverable state, not an exception; the runtime blocks retry until reconciliation confirms or denies the outcome
+- **Multi-agent handoffs** — transfer context across authority boundaries without leaking full conversation history; the receiving agent gets a scoped context package, not the source session
 
 ---
 
@@ -47,13 +58,37 @@ Your agent (Claude, OpenAI, LangGraph, anything)
 
 ---
 
+## Quick Start
+
+**Prerequisites:** Docker, Python 3.13+
+
+```bash
+git clone https://github.com/nenedesign/conversational-ops-runtime.git
+cd conversational-ops-runtime
+
+# Install dependencies (hash-verified)
+pip install -r requirements.txt
+
+# Start Postgres and apply schema (idempotent — safe to re-run)
+make db-up
+
+# Start the API on :8080
+make dev
+```
+
+Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY` to use managed runs. The default `API_KEY=dev-api-key-001` works for local testing against all core endpoints.
+
+See [`client_example.py`](client_example.py) for a full 8-step end-to-end walkthrough using raw HTTP.
+
+---
+
 ## Core protocol: POST /v1/tool-calls
 
 The model output is a tool request. The runtime response is not necessarily a tool result:
 
 ```
 POST /v1/tool-calls
-Idempotency-Key: tc-run_123-EMP4412-001
+Idempotency-Key: tc-run_123-EMP4412-001   ← include on every mutation
 
 {
   "agent": { "id": "payroll-agent-a", "version": "0.3.1" },
@@ -71,7 +106,7 @@ Idempotency-Key: tc-run_123-EMP4412-001
 → 200 OK
 {
   "tool_call_id": "tc_456",
-  "status": "approval_required",
+  "status": "approval_required",      ← one of: proposal_created | approval_required | rejected | command_created | unknown
   "approval": {
     "approval_id": "approval_234",
     "risk_level": "high",
@@ -81,7 +116,22 @@ Idempotency-Key: tc-run_123-EMP4412-001
 }
 ```
 
-Response `status` is one of: `proposal_created` | `approval_required` | `rejected` | `command_created` | `unknown`. That is the protocol.
+```mermaid
+sequenceDiagram
+    participant Model as AI Agent
+    participant Runtime as Runtime
+    participant Human as Approver
+    participant Provider as External System
+
+    Model->>Runtime: POST /v1/tool-calls
+    Runtime-->>Model: 200 approval_required
+    Human->>Runtime: POST /v1/approvals/{id}/claim
+    Human->>Runtime: POST /v1/approvals/{id}/approve
+    Note over Runtime: Recheck — stale detection
+    Runtime->>Provider: commit_correction (idempotent)
+    Provider-->>Runtime: committed / unknown
+    Runtime-->>Model: command.succeeded / reconciliation required
+```
 
 ---
 
