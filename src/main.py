@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from .config import settings
 from .db import close_pool, get_pool, init_pool
-from .routers import approvals, commands, proposals, tool_calls
+from .routers import approvals, commands, proposals, runs, tool_calls
 from .tool_contracts import load_contracts
 from .worker import dispatch_loop
 
@@ -49,6 +49,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 # Versioned prefix for all routes
 PREFIX = "/v1"
 
+app.include_router(runs.router, prefix=PREFIX)
 app.include_router(tool_calls.router, prefix=PREFIX)
 app.include_router(proposals.router, prefix=PREFIX)
 app.include_router(approvals.router, prefix=PREFIX)

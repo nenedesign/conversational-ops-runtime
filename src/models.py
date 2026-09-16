@@ -167,6 +167,44 @@ class CommandAttemptResponse(BaseModel):
     completed_at: datetime | None
 
 
+class CreateRunRequest(BaseModel):
+    agent_id: str
+    agent_version: str | None = None
+    system_prompt: str | None = None
+
+
+class RunResponse(BaseModel):
+    run_id: str
+    tenant_id: str
+    status: str
+    agent_id: str
+    agent_version: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
+class RunMessageRequest(BaseModel):
+    content: str | None = None  # None or empty = resume after approval
+
+
+class RunMessageResponse(BaseModel):
+    run_id: str
+    status: str
+    message: dict[str, Any] | None = None
+    pending_approval: dict[str, Any] | None = None
+
+
+class RunEventResponse(BaseModel):
+    event_id: str
+    run_id: str
+    type: str
+    occurred_at: datetime
+    producer: str
+    causation_id: str
+    data: dict[str, Any]
+
+
 class ErrorBody(BaseModel):
     code: str
     message: str
