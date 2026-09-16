@@ -121,18 +121,18 @@ Failure branches (stale approval, unknown outcome, expired, revised) are in [`sp
 
 ---
 
-## What makes this different
+## Design goals
 
-Policy enforcement, human approval, audit trails, replay, and self-hosting are now common among agent governance products. This project does not compete on those.
+Several products address governed agent execution. From documentation review, the closest are [AxonFlow](https://github.com/getaxonflow/axonflow) (BSL 1.1, broad enterprise platform), [JamJet](https://jamjet.dev) (Apache 2.0, "action-control plane for AI agents"), and [Tandem](https://tandem.ac) (authority and runtime model, enterprise focus). LangGraph and Temporal are complementary — better understood as integration targets than competitors.
 
-The differentiation is:
+This runtime is designed around a specific set of goals. We have not yet done hands-on testing to confirm which of these are genuinely absent from the closest products — that is the next stage of work (see [Status](#status)):
 
-- **Typed provider adapter contract** — `prepare`, `commit`, `verify`, `reconcile` as explicit, separately callable methods with typed request and result objects. Not a generic hook.
-- **Unknown outcome as a first-class state** — not an exception, not an error. `command.status = unknown` is a durable state that blocks retry until reconciliation completes.
-- **Stale approval detection** — `authorization.rechecked` compares provider resource version at approval time against current version before dispatch. A stale approval is invalidated and the human must re-review.
-- **Proposal versioning** — each revision creates an immutable `ProposalVersion` record. The approved version is pinned on the command. Not a field on a mutable record.
-- **REST-first, not SDK-first** — the action boundary is a public HTTP API. No SDK required to integrate.
-- **Apache 2.0** — permissive open source. The closest conceptual competitors use BSL 1.1 or proprietary licensing.
+- **Typed provider adapter contract** — `prepare`, `commit`, `verify`, `reconcile` as explicit, separately callable methods with typed request and result objects. The contract is defined in [`adapters/adapter_interface.py`](adapters/adapter_interface.py) with a conformance test suite.
+- **Unknown outcome as a first-class state** — `command.status = unknown` is a durable state, not an exception. The runtime blocks retry until reconciliation completes. Returning `"unknown"` from `commit_correction` is the documented contract, not a workaround.
+- **Stale approval detection** — `authorization.rechecked` compares the provider resource version recorded at prepare time against the current version before dispatch. A stale approval is invalidated; the human must re-review against the current state.
+- **Immutable proposal versioning** — each revision creates a new `ProposalVersion` record. The command pins the exact approved version. The approval history is preserved in full.
+- **REST-first protocol** — the action boundary is a public HTTP API. No SDK required to submit a tool call or integrate an approval workflow.
+- **Apache 2.0** — permissive open source. AxonFlow uses BSL 1.1 (source-available, not permissive). Confirmed from public repository licensing.
 
 ---
 
@@ -232,7 +232,9 @@ See [`adapters/adapter_interface.py`](adapters/adapter_interface.py) for the ful
 
 **Phase 0: complete.** Spec, schemas, event catalog, database schema, adapter interface, conformance tests.
 
-**Phase 1 (next):** Agent API, Action Service, Command Worker, PostgreSQL, Claude Sonnet 4.6 as model, SimulatedPayrollProvider, minimal approval console. Exit criteria: one full governed-action loop end-to-end with audit events matching the golden sequence and inspect replay without side effects.
+**Competitive testing (next, before Phase 1):** Hands-on testing of AxonFlow, JamJet, and Tandem against the specific design goals listed above. Until this is done, the claims in the Design goals section reflect intent, not confirmed gaps. Findings will be documented in `docs/competitor-notes/` and will inform any design adjustments before the Phase 1 build begins.
+
+**Phase 1:** Agent API, Action Service, Command Worker, PostgreSQL, Claude Sonnet 4.6 as model, SimulatedPayrollProvider, minimal approval console. Exit criteria: one full governed-action loop end-to-end with audit events matching the golden sequence and inspect replay without side effects.
 
 ---
 
