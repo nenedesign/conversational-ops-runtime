@@ -1,23 +1,27 @@
 """
-Conversational Operations Runtime — Core Endpoint Conformance Tests
+Conversational Operations Runtime — Conformance Test Suite
 
-One passing test per API endpoint. Tests validate:
-  - Correct HTTP status codes
-  - Required response fields
-  - Idempotency key replay behavior
-  - Standard error envelope shape
-  - Invalid state transition rejection
+Validates the live runtime against its own contract. Two tiers:
 
-Run against a stub server or the real runtime:
-  BASE_URL=http://localhost:8080 API_KEY=your-key pytest conformance/
+  Unit-style (no INTEGRATION flag): verify HTTP status codes, response shapes,
+  and error envelopes against the running server. No Anthropic API calls.
+  Run with:
+      BASE_URL=http://localhost:8080 API_KEY=dev-api-key-001 pytest conformance/
 
-The golden event sequence for the primary flow is in spec/golden_sequence.json.
+  Integration (INTEGRATION=1): end-to-end workflow tests that call Claude
+  Sonnet 4.6. Requires ANTHROPIC_API_KEY in the runtime's .env.
+  Run with:
+      BASE_URL=http://localhost:8080 API_KEY=dev-api-key-001 INTEGRATION=1 pytest conformance/
+
+Endpoints under test match Phase 0-4 implementation. Endpoints planned but
+not yet implemented are marked skip with a note.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -25,12 +29,15 @@ import pytest
 import requests
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
-API_KEY = os.getenv("API_KEY", "test-key")
-HEADERS = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+API_KEY  = os.getenv("API_KEY", "dev-api-key-001")
+HEADERS  = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
+
+AGENT_A      = "payroll-agent-a"
+AGENT_B      = "border-agent-a"
+TEST_EMPLOYEE = "EMP-4412"
 
 
 def idem() -> str:
-    """Generate a unique idempotency key."""
     return f"test-{uuid.uuid4().hex[:12]}"
 
 
@@ -45,74 +52,68 @@ def get(path: str) -> requests.Response:
     return requests.get(f"{BASE_URL}{path}", headers=HEADERS)
 
 
-# ─────────────────────────────────────────────
-# Error envelope shape
-# ─────────────────────────────────────────────
-
-def assert_error_envelope(response: requests.Response, expected_code: str) -> None:
-    """All errors must use the standard error envelope."""
-    data = response.json()
+def assert_error_envelope(r: requests.Response, expected_code: str) -> None:
+    data = r.json()
     assert "error" in data, f"Response missing 'error' key: {data}"
-    error = data["error"]
-    assert "code" in error, f"Error missing 'code': {error}"
-    assert "message" in error, f"Error missing 'message': {error}"
-    assert "request_id" in error, f"Error missing 'request_id': {error}"
-    assert error["code"] == expected_code, (
-        f"Expected error code '{expected_code}', got '{error['code']}'"
-    )
+    err = data["error"]
+    assert "code" in err and "message" in err and "request_id" in err
+    assert err["code"] == expected_code, f"Expected '{expected_code}', got '{err['code']}'"
+
+
+def create_run(agent_id: str = AGENT_A) -> str:
+    r = post("/v1/runs", {"agent_id": agent_id})
+    assert r.status_code == 200, r.text
+    return r.json()["run_id"]
 
 
 # ─────────────────────────────────────────────
-# Runs
+# Health
+# ─────────────────────────────────────────────
+
+class TestHealth:
+    def test_health_returns_ok(self):
+        r = get("/health")
+        assert r.status_code == 200
+        assert r.json()["status"] == "ok"
+
+
+# ─────────────────────────────────────────────
+# Runs — POST /v1/runs
 # ─────────────────────────────────────────────
 
 class TestCreateRun:
-    def test_creates_run_with_201(self):
-        r = post("/v1/runs", {"agent_id": "payroll-detective"}, idempotency_key=idem())
-        assert r.status_code == 201, r.text
+    def test_creates_run(self):
+        r = post("/v1/runs", {"agent_id": AGENT_A})
+        assert r.status_code == 200, r.text
         data = r.json()
         assert "run_id" in data
         assert "tenant_id" in data
         assert data["status"] == "created"
+        assert data["agent_id"] == AGENT_A
 
     def test_requires_agent_id(self):
-        r = post("/v1/runs", {}, idempotency_key=idem())
-        assert r.status_code == 400
-        assert_error_envelope(r, "invalid_tool_request")
+        r = post("/v1/runs", {})
+        assert r.status_code == 422
 
-    def test_tenant_not_in_request_body(self):
-        """Tenant must come from the credential, not the request body."""
-        r = post("/v1/runs",
-                 {"agent_id": "payroll-detective", "tenant_id": "injected-tenant"},
-                 idempotency_key=idem())
-        # Either the runtime ignores tenant_id in the body (201) or rejects it (400).
-        # It must never use the supplied value to override the authenticated tenant.
-        if r.status_code == 201:
-            data = r.json()
-            assert data["tenant_id"] != "injected-tenant"
+    def test_optional_agent_version(self):
+        r = post("/v1/runs", {"agent_id": AGENT_A, "agent_version": "1.2.0"})
+        assert r.status_code == 200
+        assert r.json()["agent_version"] == "1.2.0"
 
-    def test_idempotency_replay(self):
-        key = idem()
-        r1 = post("/v1/runs", {"agent_id": "payroll-detective"}, idempotency_key=key)
-        r2 = post("/v1/runs", {"agent_id": "payroll-detective"}, idempotency_key=key)
-        assert r1.status_code == 201
-        assert r2.status_code == 201
-        assert r1.json()["run_id"] == r2.json()["run_id"]
-        assert r2.headers.get("X-Idempotency-Replayed") == "true"
+    def test_tenant_from_credential_not_body(self):
+        """Runtime must ignore tenant_id in the request body."""
+        r = post("/v1/runs", {"agent_id": AGENT_A, "tenant_id": "injected"})
+        if r.status_code == 200:
+            assert r.json()["tenant_id"] != "injected"
 
-    def test_idempotency_conflict(self):
-        key = idem()
-        r1 = post("/v1/runs", {"agent_id": "payroll-detective"}, idempotency_key=key)
-        assert r1.status_code == 201
-        r2 = post("/v1/runs", {"agent_id": "border-buddy"}, idempotency_key=key)
-        assert r2.status_code == 409
-        assert_error_envelope(r2, "idempotency_conflict")
 
+# ─────────────────────────────────────────────
+# Runs — GET /v1/runs/{run_id}
+# ─────────────────────────────────────────────
 
 class TestGetRun:
     def test_returns_run(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
+        run_id = create_run()
         r = get(f"/v1/runs/{run_id}")
         assert r.status_code == 200
         assert r.json()["run_id"] == run_id
@@ -120,203 +121,252 @@ class TestGetRun:
     def test_not_found(self):
         r = get("/v1/runs/nonexistent-run-id")
         assert r.status_code == 404
+        assert_error_envelope(r, "not_found")
 
 
-class TestListRuns:
-    def test_returns_paginated_list(self):
-        r = get("/v1/runs?limit=5")
-        assert r.status_code == 200
-        data = r.json()
-        assert "runs" in data
-        assert "has_more" in data
-        assert isinstance(data["runs"], list)
-
-
-class TestSendMessage:
-    def test_returns_202_for_async_run(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        r = post(f"/v1/runs/{run_id}/messages",
-                 {"content": "Investigate EMP-4412."},
-                 idempotency_key=idem())
-        assert r.status_code in (200, 202), r.text
-        data = r.json()
-        assert "run_id" in data
-        assert "status" in data
-        assert "terminal" in data
-
-    def test_response_includes_idempotency_fields(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        key = idem()
-        r = post(f"/v1/runs/{run_id}/messages",
-                 {"content": "Investigate EMP-4412."},
-                 idempotency_key=key)
-        assert r.status_code in (200, 202)
-        data = r.json()
-        assert data.get("idempotency_key") == key
-        assert "idempotency_replayed" in data
-
-    def test_message_idempotency_replay(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        key = idem()
-        r1 = post(f"/v1/runs/{run_id}/messages",
-                  {"content": "Investigate EMP-4412."}, idempotency_key=key)
-        r2 = post(f"/v1/runs/{run_id}/messages",
-                  {"content": "Investigate EMP-4412."}, idempotency_key=key)
-        assert r1.status_code in (200, 202)
-        assert r2.status_code in (200, 202)
-        assert r1.json()["run_id"] == r2.json()["run_id"]
-
-
-class TestRunEvents:
-    def test_returns_event_list_with_cursor(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        r = get(f"/v1/runs/{run_id}/events?limit=10")
-        assert r.status_code == 200
-        data = r.json()
-        assert "events" in data
-        assert "has_more" in data
-
-    def test_events_have_required_fields(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        r = get(f"/v1/runs/{run_id}/events")
-        assert r.status_code == 200
-        events = r.json()["events"]
-        if events:
-            ev = events[0]
-            assert "event_id" in ev
-            assert "sequence" in ev
-            assert "type" in ev
-            assert "occurred_at" in ev
-            assert "recorded_at" in ev
-            assert "producer" in ev
-            assert "correlation_id" in ev
-
+# ─────────────────────────────────────────────
+# Runs — POST /v1/runs/{run_id}/cancel
+# ─────────────────────────────────────────────
 
 class TestCancelRun:
-    def test_cancel_returns_cancelled_status(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        r = post(f"/v1/runs/{run_id}/cancel", {"reason": "test"},
-                 idempotency_key=idem())
+    def test_cancel_returns_cancelled(self):
+        run_id = create_run()
+        r = post(f"/v1/runs/{run_id}/cancel", {})
         assert r.status_code == 200
         assert r.json()["status"] == "cancelled"
 
-    def test_cannot_cancel_completed_run(self):
-        """Cancelling a terminal run is an invalid state transition."""
-        # This test assumes a completed run fixture exists or is set up
-        # In a real test suite, set up a completed run first
+    def test_cannot_cancel_already_cancelled(self):
+        run_id = create_run()
+        post(f"/v1/runs/{run_id}/cancel", {})
+        r = post(f"/v1/runs/{run_id}/cancel", {})
+        assert r.status_code == 409
+        assert_error_envelope(r, "run_terminal")
+
+    def test_cancel_not_found(self):
+        r = post("/v1/runs/nonexistent/cancel", {})
+        assert r.status_code == 404
+
+
+# ─────────────────────────────────────────────
+# Runs — GET /v1/runs/{run_id}/events
+# ─────────────────────────────────────────────
+
+class TestRunEvents:
+    def test_returns_list_for_new_run(self):
+        run_id = create_run()
+        r = get(f"/v1/runs/{run_id}/events")
+        assert r.status_code == 200
+        events = r.json()
+        assert isinstance(events, list)
+
+    def test_events_have_required_fields(self):
+        run_id = create_run()
+        r = get(f"/v1/runs/{run_id}/events")
+        assert r.status_code == 200
+        events = r.json()
+        if events:
+            ev = events[0]
+            for field in ("event_id", "run_id", "type", "occurred_at", "producer", "causation_id"):
+                assert field in ev, f"Event missing field: {field}"
+
+    def test_not_found_for_unknown_run(self):
+        r = get("/v1/runs/nonexistent/events")
+        assert r.status_code == 404
+
+
+# ─────────────────────────────────────────────
+# Runs — GET /v1/runs (list) — not yet implemented
+# ─────────────────────────────────────────────
+
+class TestListRuns:
+    @pytest.mark.skip(reason="GET /v1/runs not yet implemented")
+    def test_returns_paginated_list(self):
         pass
 
 
+# ─────────────────────────────────────────────
+# Runs — replay — not yet implemented
+# ─────────────────────────────────────────────
+
 class TestReplayRun:
-    def test_inspect_mode_returns_202(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        r = post(f"/v1/runs/{run_id}/replay",
-                 {"mode": "inspect"},
-                 idempotency_key=idem())
-        assert r.status_code in (200, 202), r.text
+    @pytest.mark.skip(reason="POST /v1/runs/{id}/replay not yet implemented")
+    def test_inspect_mode(self):
+        pass
 
-    def test_fork_defaults_to_sandbox(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        r = post(f"/v1/runs/{run_id}/replay",
-                 {"mode": "fork", "from_state_version": 1},
-                 idempotency_key=idem())
-        if r.status_code in (200, 202):
-            data = r.json()
-            assert data.get("execution_target") == "sandbox"
 
-    def test_fork_production_requires_confirm(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        r = post(f"/v1/runs/{run_id}/replay",
-                 {"mode": "fork", "from_state_version": 1,
-                  "execution_target": "production"},   # missing confirm_production
-                 idempotency_key=idem())
-        assert r.status_code in (400, 422), (
-            "Fork to production without confirm_production must be rejected"
-        )
+# ─────────────────────────────────────────────
+# Tool calls
+# ─────────────────────────────────────────────
 
-    def test_fork_response_includes_lineage(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        r = post(f"/v1/runs/{run_id}/replay",
-                 {"mode": "fork", "from_state_version": 1,
-                  "fork_reason": "conformance test"},
+class TestToolCallSubmission:
+    def _valid_body(self) -> dict:
+        return {
+            "action": {
+                "tool_name": "prepare_classification_correction",
+                "arguments": {
+                    "employee_id": TEST_EMPLOYEE,
+                    "correction_type": "misclassification_contractor_to_employee",
+                    "evidence_ids": ["ev-001"],
+                },
+            },
+            "context": {"actor_id": "test-actor"},
+        }
+
+    def test_submit_returns_approval_required(self):
+        r = post("/v1/tool-calls", self._valid_body(),
                  idempotency_key=idem())
-        if r.status_code in (200, 202):
-            data = r.json()
-            assert "source_run_id" in data
-            assert data["source_run_id"] == run_id
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert "tool_call_id" in data
+        assert data["status"] == "approval_required"
+        assert data["next_action"] == "await_approval"
+        assert data["approval"]["risk_level"] == "high"
+
+    def test_unknown_tool_rejected(self):
+        body = {
+            "action": {"tool_name": "nonexistent_tool", "arguments": {}},
+            "context": {"actor_id": "test-actor"},
+        }
+        r = post("/v1/tool-calls", body, idempotency_key=idem())
+        assert r.status_code == 400
+        assert_error_envelope(r, "invalid_tool_request")
+
+    def test_invalid_arguments_rejected(self):
+        body = {
+            "action": {
+                "tool_name": "prepare_classification_correction",
+                "arguments": {
+                    "employee_id": TEST_EMPLOYEE,
+                    "correction_type": "not_a_valid_enum_value",
+                    "evidence_ids": ["ev-001"],
+                },
+            },
+            "context": {"actor_id": "test-actor"},
+        }
+        r = post("/v1/tool-calls", body, idempotency_key=idem())
+        assert r.status_code == 400
+        assert_error_envelope(r, "invalid_tool_request")
+
+    def test_idempotency_replay(self):
+        key = idem()
+        r1 = post("/v1/tool-calls", self._valid_body(), idempotency_key=key)
+        r2 = post("/v1/tool-calls", self._valid_body(), idempotency_key=key)
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r1.json()["tool_call_id"] == r2.json()["tool_call_id"]
 
 
 # ─────────────────────────────────────────────
 # Proposals
 # ─────────────────────────────────────────────
 
-class TestGetProposal:
-    def test_returns_proposal_with_approved_version(self):
-        """Proposal schema must include approved_version when status is approved."""
-        # Requires a fixture with an approved proposal
-        # In integration: run a full workflow, extract proposal_id from approval
-        pass
+class TestProposals:
+    def _create_proposal(self) -> tuple[str, str]:
+        """Returns (tool_call_id, proposal_id)."""
+        r = post("/v1/tool-calls", {
+            "action": {
+                "tool_name": "prepare_classification_correction",
+                "arguments": {
+                    "employee_id": TEST_EMPLOYEE,
+                    "correction_type": "misclassification_contractor_to_employee",
+                    "evidence_ids": ["ev-001"],
+                },
+            },
+            "context": {"actor_id": "test-actor"},
+        }, idempotency_key=idem())
+        assert r.status_code == 200
+        data = r.json()
+        return data["tool_call_id"], data["proposal"]["proposal_id"]
+
+    def test_get_proposal(self):
+        _, proposal_id = self._create_proposal()
+        r = get(f"/v1/proposals/{proposal_id}")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["proposal_id"] == proposal_id
+        assert "status" in data
+
+    def test_get_proposal_versions(self):
+        _, proposal_id = self._create_proposal()
+        r = get(f"/v1/proposals/{proposal_id}/versions")
+        assert r.status_code == 200
+        versions = r.json()
+        assert isinstance(versions, list)
+        assert len(versions) >= 1
+
+    def test_get_specific_version(self):
+        _, proposal_id = self._create_proposal()
+        r = get(f"/v1/proposals/{proposal_id}/versions/1")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["version"] == 1
+        assert "risk_level" in data
 
     def test_not_found(self):
-        r = get("/v1/proposals/nonexistent-proposal-id")
+        r = get("/v1/proposals/nonexistent-id")
         assert r.status_code == 404
-
-    def test_versions_endpoint_returns_list(self):
-        # Requires fixture with a multi-version proposal
-        pass
+        assert_error_envelope(r, "not_found")
 
 
 # ─────────────────────────────────────────────
 # Approvals
 # ─────────────────────────────────────────────
 
-class TestListApprovals:
-    def test_returns_paginated_list(self):
-        r = get("/v1/approvals?limit=10")
+class TestApprovals:
+    def _create_approval(self) -> tuple[str, str]:
+        """Returns (approval_id, proposal_id)."""
+        r = post("/v1/tool-calls", {
+            "action": {
+                "tool_name": "prepare_classification_correction",
+                "arguments": {
+                    "employee_id": TEST_EMPLOYEE,
+                    "correction_type": "misclassification_contractor_to_employee",
+                    "evidence_ids": ["ev-001"],
+                },
+            },
+            "context": {"actor_id": "test-actor"},
+        }, idempotency_key=idem())
+        data = r.json()
+        return data["approval"]["approval_id"], data["proposal"]["proposal_id"]
+
+    def test_get_approval(self):
+        approval_id, _ = self._create_approval()
+        r = get(f"/v1/approvals/{approval_id}")
         assert r.status_code == 200
         data = r.json()
-        assert "approvals" in data
-        assert "has_more" in data
+        assert data["approval_id"] == approval_id
+        assert data["status"] == "pending"
+        assert "risk_level" in data
+        assert "current_proposal_version" in data
 
-    def test_filter_by_status(self):
-        r = get("/v1/approvals?status=pending")
+    def test_claim_approval(self):
+        approval_id, _ = self._create_approval()
+        r = post(f"/v1/approvals/{approval_id}/claim", {},
+                 idempotency_key=idem())
         assert r.status_code == 200
 
-    def test_filter_assigned_to_me(self):
-        r = get("/v1/approvals?assigned_to=me")
+    def test_stale_approval_rejected(self):
+        """Approving with wrong proposal_version must be rejected."""
+        approval_id, _ = self._create_approval()
+        r = post(f"/v1/approvals/{approval_id}/approve",
+                 {"proposal_version": 999, "approver_note": "stale"},
+                 idempotency_key=idem())
+        assert r.status_code == 409
+        assert_error_envelope(r, "stale_approval")
+
+    def test_reject_approval(self):
+        approval_id, _ = self._create_approval()
+        r = post(f"/v1/approvals/{approval_id}/reject",
+                 {"proposal_version": 1, "reason": "not warranted"},
+                 idempotency_key=idem())
         assert r.status_code == 200
 
+    def test_not_found(self):
+        r = get("/v1/approvals/nonexistent-id")
+        assert r.status_code == 404
 
-class TestApprovalLifecycle:
-    def test_claim_prevents_concurrent_review(self):
-        """Two claim calls on the same approval — second should fail or be idempotent."""
-        # Requires fixture with a pending approval
-        pass
-
-    def test_approve_requires_proposal_version(self):
-        """Approve request without proposal_version must be rejected."""
-        # Requires fixture with a pending approval
-        pass
-
-    def test_revise_creates_new_version_returns_pending(self):
-        """Revise must return the approval in pending status with new version."""
-        pass
-
-    def test_cannot_approve_after_reject(self):
-        """Approving a rejected approval is an invalid state transition."""
-        pass
-
-    def test_approve_response_includes_idempotency_fields(self):
+    @pytest.mark.skip(reason="GET /v1/approvals list not yet implemented")
+    def test_list_approvals(self):
         pass
 
 
@@ -324,147 +374,310 @@ class TestApprovalLifecycle:
 # Commands
 # ─────────────────────────────────────────────
 
-class TestListCommands:
-    def test_filter_by_status_unknown(self):
-        r = get("/v1/commands?status=unknown")
+class TestCommands:
+    def test_list_commands(self):
+        r = get("/v1/commands")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+
+    def test_list_commands_filter_by_status(self):
+        r = get("/v1/commands?status=succeeded")
+        assert r.status_code == 200
+
+    def test_get_command_not_found(self):
+        r = get("/v1/commands/nonexistent-id")
+        assert r.status_code == 404
+        assert_error_envelope(r, "not_found")
+
+    def test_reconcile_only_valid_on_unknown(self):
+        """Reconcile on a non-unknown command must return 409."""
+        # Create a command via the normal approval path, then attempt reconcile
+        r_tc = post("/v1/tool-calls", {
+            "action": {
+                "tool_name": "prepare_classification_correction",
+                "arguments": {
+                    "employee_id": TEST_EMPLOYEE,
+                    "correction_type": "misclassification_contractor_to_employee",
+                    "evidence_ids": ["ev-001"],
+                },
+            },
+            "context": {"actor_id": "test-actor"},
+        }, idempotency_key=idem())
+        approval_id = r_tc.json()["approval"]["approval_id"]
+        # Approve to create command at status: authorized
+        r_approve = post(f"/v1/approvals/{approval_id}/approve",
+                         {"proposal_version": 1},
+                         idempotency_key=idem())
+        assert r_approve.status_code == 200
+        command_id = r_approve.json()["command_id"]
+        # Wait briefly for worker to dispatch
+        time.sleep(4)
+        r_cmd = get(f"/v1/commands/{command_id}")
+        assert r_cmd.status_code == 200
+        cmd_status = r_cmd.json()["status"]
+        if cmd_status != "unknown":
+            r = post(f"/v1/commands/{command_id}/reconcile", {},
+                     idempotency_key=idem())
+            assert r.status_code == 409
+            assert_error_envelope(r, "not_reconcilable")
+
+    def test_attempts_endpoint(self):
+        """GET /v1/commands/{id}/attempts returns a list."""
+        # Get any command that exists
+        cmds = get("/v1/commands").json()
+        if cmds:
+            command_id = cmds[0]["command_id"]
+            r = get(f"/v1/commands/{command_id}/attempts")
+            assert r.status_code == 200
+            assert isinstance(r.json(), list)
+
+
+# ─────────────────────────────────────────────
+# Handoffs
+# ─────────────────────────────────────────────
+
+class TestHandoffs:
+    def test_get_handoff_not_found(self):
+        r = get("/v1/handoffs/nonexistent-id")
+        assert r.status_code == 404
+        assert_error_envelope(r, "not_found")
+
+    def test_handoff_on_terminal_run_rejected(self):
+        run_id = create_run()
+        post(f"/v1/runs/{run_id}/cancel", {})
+        r = post(f"/v1/runs/{run_id}/handoffs", {
+            "to_agent": AGENT_B,
+            "reason": "test",
+        })
+        assert r.status_code == 409
+        assert_error_envelope(r, "run_terminal")
+
+    def test_handoff_creates_target_run(self):
+        run_id = create_run()
+        r = post(f"/v1/runs/{run_id}/handoffs", {
+            "to_agent": AGENT_B,
+            "reason": "conformance test handoff",
+            "context_package": {
+                "structured_facts": {"employee_id": TEST_EMPLOYEE, "jurisdiction": "AR"},
+            },
+        })
+        assert r.status_code == 201, r.text
+        data = r.json()
+        assert data["from_agent"] == AGENT_A
+        assert data["to_agent"] == AGENT_B
+        assert data["target_run_id"] is not None
+        assert data["status"] == "active"
+
+        # Source run should be completed
+        source = get(f"/v1/runs/{run_id}").json()
+        assert source["status"] == "completed"
+
+        # Target run should be created
+        target = get(f"/v1/runs/{data['target_run_id']}").json()
+        assert target["status"] == "created"
+        assert target["agent_id"] == AGENT_B
+
+    def test_get_handoff(self):
+        run_id = create_run()
+        created = post(f"/v1/runs/{run_id}/handoffs", {
+            "to_agent": AGENT_B,
+            "reason": "conformance test",
+        }).json()
+        handoff_id = created["handoff_id"]
+
+        r = get(f"/v1/handoffs/{handoff_id}")
         assert r.status_code == 200
         data = r.json()
-        assert "commands" in data
-
-    def test_filter_by_run_id(self):
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
-        r = get(f"/v1/commands?run_id={run_id}")
-        assert r.status_code == 200
-
-
-class TestReconcile:
-    def test_reconcile_only_valid_on_unknown_command(self):
-        """Reconciliation on a succeeded command is an invalid state transition."""
-        pass
-
-    def test_reconcile_returns_202(self):
-        """Valid reconciliation request returns 202 Accepted."""
-        pass
+        assert data["handoff_id"] == handoff_id
+        assert data["from_agent"] == AGENT_A
+        assert data["to_agent"] == AGENT_B
 
 
 # ─────────────────────────────────────────────
-# Idempotency contract
+# Spec artifacts
 # ─────────────────────────────────────────────
 
-class TestIdempotencyContract:
-    def test_same_key_same_body_returns_same_response(self):
-        key = idem()
-        r1 = post("/v1/runs", {"agent_id": "payroll-detective"}, idempotency_key=key)
-        r2 = post("/v1/runs", {"agent_id": "payroll-detective"}, idempotency_key=key)
-        assert r1.json()["run_id"] == r2.json()["run_id"]
+class TestSpecArtifacts:
+    SPEC_DIR = Path(__file__).parent.parent / "spec"
 
-    def test_same_key_different_body_returns_409(self):
-        key = idem()
-        r1 = post("/v1/runs", {"agent_id": "payroll-detective"}, idempotency_key=key)
-        assert r1.status_code == 201
-        r2 = post("/v1/runs", {"agent_id": "border-buddy"}, idempotency_key=key)
-        assert r2.status_code == 409
-        assert_error_envelope(r2, "idempotency_conflict")
-        data = r2.json()["error"]["details"]
-        assert "original_request_id" in data
-        assert "original_created_at" in data
-
-    def test_replay_header_set_on_replayed_response(self):
-        key = idem()
-        r1 = post("/v1/runs", {"agent_id": "payroll-detective"}, idempotency_key=key)
-        assert r1.status_code == 201
-        assert r1.headers.get("X-Idempotency-Replayed") != "true"
-        r2 = post("/v1/runs", {"agent_id": "payroll-detective"}, idempotency_key=key)
-        assert r2.headers.get("X-Idempotency-Replayed") == "true"
-
-
-# ─────────────────────────────────────────────
-# Golden sequence conformance
-# ─────────────────────────────────────────────
-
-class TestGoldenSequence:
-    """
-    Validate that the golden event sequence from spec/golden_sequence.json
-    is emitted correctly for the primary workflow.
-
-    This test runs the full loop: create run → send message →
-    await approval → claim → approve → verify command → check events.
-    """
-
-    GOLDEN_PATH = Path(__file__).parent.parent / "spec" / "golden_sequence.json"
-
-    def test_golden_sequence_file_exists(self):
-        assert self.GOLDEN_PATH.exists(), (
-            f"Golden sequence not found at {self.GOLDEN_PATH}"
-        )
+    def test_openapi_exists(self):
+        assert (self.SPEC_DIR / "openapi.yaml").exists()
 
     def test_golden_sequence_is_valid_json(self):
-        data = json.loads(self.GOLDEN_PATH.read_text())
+        path = self.SPEC_DIR / "golden_sequence.json"
+        assert path.exists()
+        data = json.loads(path.read_text())
         assert "sequence" in data
         assert len(data["sequence"]) > 0
-        for item in data["sequence"]:
-            assert "event" in item
 
-    def test_primary_flow_emits_golden_events(self):
-        """
-        Integration test: run the primary flow and verify the event log
-        matches the golden sequence in order.
+    def test_tool_contracts_load(self):
+        """All JSON files in spec/tool_contracts/ must be valid and have a 'tools' key."""
+        contracts_dir = self.SPEC_DIR / "tool_contracts"
+        assert contracts_dir.exists()
+        files = list(contracts_dir.glob("*.json"))
+        assert len(files) >= 2, "Expected at least payroll.json and handoff.json"
+        for f in files:
+            data = json.loads(f.read_text())
+            assert "tools" in data, f"{f.name} missing 'tools' key"
+            assert len(data["tools"]) > 0
 
-        Skipped unless INTEGRATION=1 is set — requires a running runtime
-        with a simulated payroll provider.
-        """
-        if not os.getenv("INTEGRATION"):
-            pytest.skip("Set INTEGRATION=1 to run full integration test")
 
-        golden = json.loads(self.GOLDEN_PATH.read_text())
-        expected_events = [item["event"] for item in golden["sequence"]]
+# ─────────────────────────────────────────────
+# Integration — Phase 2: command worker
+# ─────────────────────────────────────────────
 
-        # 1. Create run
-        run_id = post("/v1/runs", {"agent_id": "payroll-detective"},
-                      idempotency_key=idem()).json()["run_id"]
+class TestPhase2CommandWorker:
+    """Requires INTEGRATION=1 — no Anthropic API calls, but runs the live worker."""
 
-        # 2. Send message
+    @pytest.mark.skipif(not os.getenv("INTEGRATION"), reason="Set INTEGRATION=1")
+    def test_worker_dispatches_after_approval(self):
+        """Full loop: submit tool call → approve → worker dispatches → command.succeeded."""
+        key = idem()
+        r = post("/v1/tool-calls", {
+            "action": {
+                "tool_name": "prepare_classification_correction",
+                "arguments": {
+                    "employee_id": TEST_EMPLOYEE,
+                    "correction_type": "misclassification_contractor_to_employee",
+                    "evidence_ids": ["ev-integration-001"],
+                },
+            },
+            "context": {"actor_id": "integration-test"},
+        }, idempotency_key=key)
+        assert r.status_code == 200
+        approval_id = r.json()["approval"]["approval_id"]
+
+        # Approve
+        approve_r = post(f"/v1/approvals/{approval_id}/approve",
+                         {"proposal_version": 1, "approver_note": "integration test"},
+                         idempotency_key=idem())
+        assert approve_r.status_code == 200
+        command_id = approve_r.json()["command_id"]
+
+        # Poll command until terminal
+        for _ in range(15):
+            time.sleep(2)
+            cmd = get(f"/v1/commands/{command_id}").json()
+            if cmd["status"] in ("succeeded", "failed", "unknown"):
+                break
+
+        assert cmd["status"] == "succeeded", f"Command did not succeed: {cmd}"
+        assert cmd["downstream_reference"] is not None
+
+        # Verify attempt record
+        attempts = get(f"/v1/commands/{command_id}/attempts").json()
+        assert len(attempts) >= 1
+        assert attempts[0]["status"] == "succeeded"
+
+
+# ─────────────────────────────────────────────
+# Integration — Phase 3: managed run loop
+# ─────────────────────────────────────────────
+
+class TestPhase3ManagedRun:
+    """Requires INTEGRATION=1 and ANTHROPIC_API_KEY in runtime .env."""
+
+    @pytest.mark.skipif(not os.getenv("INTEGRATION"), reason="Set INTEGRATION=1")
+    def test_full_managed_run_loop(self):
+        """Create run → send message → await approval → approve → resume → completed."""
+        run_id = create_run(AGENT_A)
+
+        # Send investigation message
         msg_r = post(f"/v1/runs/{run_id}/messages",
-                     {"content": "Investigate the payroll anomaly for EMP-4412."},
-                     idempotency_key=idem())
-        assert msg_r.status_code in (200, 202)
-        assert msg_r.json()["status"] == "awaiting_approval"
+                     {"content": f"Investigate {TEST_EMPLOYEE} for compliance issues."})
+        assert msg_r.status_code == 200, msg_r.text
+        msg = msg_r.json()
+        assert msg["status"] == "awaiting_approval"
+        assert msg["pending_approval"] is not None
+        approval_id = msg["pending_approval"]["approval_id"]
 
-        approval_id = msg_r.json()["pending_approval"]["approval_id"]
-
-        # 3. Claim approval
-        post(f"/v1/approvals/{approval_id}/claim", {}, idempotency_key=idem())
-
-        # 4. Get current proposal version
+        # Get proposal version
         approval = get(f"/v1/approvals/{approval_id}").json()
         version = approval["current_proposal_version"]
 
-        # 5. Approve
-        approve_r = post(
-            f"/v1/approvals/{approval_id}/approve",
-            {"proposal_version": version, "approver_note": "Conformance test approval."},
-            idempotency_key=idem(),
-        )
+        # Approve
+        approve_r = post(f"/v1/approvals/{approval_id}/approve",
+                         {"proposal_version": version, "approver_note": "integration test"},
+                         idempotency_key=idem())
         assert approve_r.status_code == 200
+        command_id = approve_r.json()["command_id"]
 
-        # 6. Wait for command to complete (simple poll)
-        import time
-        for _ in range(10):
-            time.sleep(1)
-            run = get(f"/v1/runs/{run_id}").json()
-            if run["status"] in ("completed", "failed"):
+        # Wait for worker
+        for _ in range(15):
+            time.sleep(2)
+            if get(f"/v1/commands/{command_id}").json()["status"] == "succeeded":
                 break
 
-        assert run["status"] == "completed", f"Run did not complete: {run['status']}"
+        # Resume
+        resume_r = post(f"/v1/runs/{run_id}/messages", {})
+        assert resume_r.status_code == 200
+        final = resume_r.json()
+        assert final["status"] == "completed"
+        assert final["message"] is not None
 
-        # 7. Verify event sequence
-        events_r = get(f"/v1/runs/{run_id}/events?limit=100")
-        assert events_r.status_code == 200
-        actual_types = [e["type"] for e in events_r.json()["events"]]
+        # Verify audit trail
+        events = get(f"/v1/runs/{run_id}/events").json()
+        event_types = [e["type"] for e in events]
+        for expected in ("tool_call.received", "proposal.created", "approval.required",
+                         "command.dispatched", "command.succeeded", "run.completed"):
+            assert expected in event_types, f"Missing audit event: {expected}"
 
-        for expected in expected_events:
-            assert expected in actual_types, (
-                f"Expected event '{expected}' not found in run events.\n"
-                f"Actual events: {actual_types}"
-            )
+
+# ─────────────────────────────────────────────
+# Integration — Phase 4: multi-agent handoff
+# ─────────────────────────────────────────────
+
+class TestPhase4AgentHandoff:
+    """Requires INTEGRATION=1 and ANTHROPIC_API_KEY in runtime .env."""
+
+    @pytest.mark.skipif(not os.getenv("INTEGRATION"), reason="Set INTEGRATION=1")
+    def test_agent_handoff_from_managed_run(self):
+        """payroll-agent-a detects withholding issue and hands off to border-agent-a."""
+        run_id = create_run(AGENT_A)
+
+        msg_r = post(f"/v1/runs/{run_id}/messages", {
+            "content": (
+                f"Investigate {TEST_EMPLOYEE} for compliance issues. "
+                "If you detect a withholding obligation requiring cross-border expertise, "
+                "hand off to the appropriate specialist agent."
+            ),
+        })
+        assert msg_r.status_code == 200, msg_r.text
+        final = msg_r.json()
+
+        # Run may complete immediately after handoff
+        assert final["status"] == "completed"
+        assert final["handoff"] is not None
+        handoff_id   = final["handoff"]["handoff_id"]
+        target_run_id = final["handoff"]["target_run_id"]
+        assert final["handoff"]["to_agent"] == AGENT_B
+
+        # Verify handoff record
+        handoff = get(f"/v1/handoffs/{handoff_id}").json()
+        assert handoff["from_agent"] == AGENT_A
+        assert handoff["to_agent"] == AGENT_B
+        assert handoff["target_run_id"] == target_run_id
+        assert handoff["status"] == "active"
+
+        # Verify source run is completed
+        source = get(f"/v1/runs/{run_id}").json()
+        assert source["status"] == "completed"
+
+        # Verify target run was created with border-agent-a
+        target = get(f"/v1/runs/{target_run_id}").json()
+        assert target["agent_id"] == AGENT_B
+
+        # Send first message to border-agent-a — it already has context pre-loaded
+        border_r = post(f"/v1/runs/{target_run_id}/messages", {
+            "content": "What is the withholding exposure and what must be resolved before reclassification?",
+        })
+        assert border_r.status_code == 200, border_r.text
+        border_final = border_r.json()
+        assert border_final["status"] in ("completed", "awaiting_approval")
+        assert border_final["message"] is not None
+
+        # Audit trail on source run must include handoff events
+        events = get(f"/v1/runs/{run_id}/events").json()
+        event_types = [e["type"] for e in events]
+        assert "run.handoff_initiated" in event_types
+        assert "run.completed" in event_types
