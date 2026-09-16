@@ -219,7 +219,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateRunRequest"
             example:
-              agent_id: payroll-detective
+              agent_id: payroll-agent-a
       responses:
         "200":
           description: Run created
@@ -921,8 +921,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateHandoffRequest"
       responses:
-        "202":
-          description: Handoff initiated
+        "201":
+          description: Handoff initiated — source run closed, target run created
           content:
             application/json:
               schema:
@@ -1584,6 +1584,9 @@ components:
           type: string
         run_id:
           type: string
+        target_run_id:
+          type: string
+          description: The newly created run for the receiving agent
         from_agent:
           type: string
         to_agent:

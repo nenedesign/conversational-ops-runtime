@@ -56,7 +56,7 @@ POST /v1/tool-calls
 Idempotency-Key: tc-run_123-EMP4412-001
 
 {
-  "agent": { "id": "payroll-detective", "version": "0.3.1" },
+  "agent": { "id": "payroll-agent-a", "version": "0.3.1" },
   "action": {
     "tool_name": "prepare_classification_correction",
     "arguments": {
@@ -168,7 +168,11 @@ GET  /v1/runs/{run_id}
 POST /v1/runs/{run_id}/messages
 GET  /v1/runs/{run_id}/events
 POST /v1/runs/{run_id}/cancel
-POST /v1/runs/{run_id}/replay
+POST /v1/runs/{run_id}/replay       (planned)
+
+POST /v1/runs/{run_id}/handoffs     ← Phase 4: trigger a handoff externally
+GET  /v1/runs/{run_id}/handoffs     (planned)
+GET  /v1/handoffs/{handoff_id}      ← Phase 4: get handoff state
 ```
 
 ---
@@ -220,6 +224,7 @@ See [`adapters/adapter_interface.py`](adapters/adapter_interface.py) for the ful
 | [`spec/versioning.md`](spec/versioning.md) | Compatibility guarantees, deprecation policy |
 | [`spec/threat_model.md`](spec/threat_model.md) | Injection vectors, authorization boundaries |
 | [`spec/tool_contracts/payroll.json`](spec/tool_contracts/payroll.json) | Tool argument schemas for payroll domain |
+| [`spec/tool_contracts/handoff.json`](spec/tool_contracts/handoff.json) | `trigger_agent_handoff` tool contract with authority boundary |
 | [`migrations/001_initial.sql`](migrations/001_initial.sql) | Postgres schema with ownership annotations |
 | [`adapters/adapter_interface.py`](adapters/adapter_interface.py) | Python Protocol + simulated provider |
 | [`conformance/test_core_endpoints.py`](conformance/test_core_endpoints.py) | pytest conformance suite |
@@ -270,6 +275,36 @@ The following were verified end-to-end against a live Postgres instance using `S
 New endpoints: `POST /v1/runs`, `GET /v1/runs/{id}`, `POST /v1/runs/{id}/messages`, `GET /v1/runs/{id}/events`, `POST /v1/runs/{id}/cancel`
 
 Requires `ANTHROPIC_API_KEY` in `.env`. Rotate after each test session.
+
+**Phase 4: complete — tested 2026-09-16.**
+
+Multi-agent handoff with authority boundaries. The following were verified end-to-end:
+
+- `trigger_agent_handoff` tool contract (`spec/tool_contracts/handoff.json`) — `is_handoff: true` flag routes the tool through a distinct execution path in `_run_turn` instead of the read-only or approval paths
+- Authority boundary enforcement — `payroll-agent-a` carries a `withholding_note` in its read-tool response for AR jurisdiction cases; this triggers `trigger_agent_handoff` with `to_agent: border-agent-a`
+- `_execute_handoff_records()` — creates the target run and handoff DB record in a single transaction; context package (structured facts, uncertainty statement) is passed as a scoped seed message, not the full conversation history
+- Source run closed cleanly — `send_message` detects `outcome: handed_off` and writes `run.handoff_initiated` + `run.completed` audit events; source run status set to `completed`
+- `border-agent-a` target run pre-seeded with structured context; `POST /v1/runs/{target_run_id}/messages` verified to produce a relevant response from the receiving agent
+- `POST /v1/runs/{run_id}/handoffs` — external handoff trigger (without a managed run tool call) verified: validates source run status, creates target run, writes audit events, returns 201
+- `GET /v1/handoffs/{handoff_id}` — handoff record retrieved with `target_run_id` confirmed present
+
+New endpoints: `POST /v1/runs/{id}/handoffs`, `GET /v1/handoffs/{id}`
+
+---
+
+## Roadmap
+
+The four-phase proof-of-concept is complete. These are the next meaningful additions, in rough priority order:
+
+**YAML domain config loader** — agent registry, tool contracts, and authority boundaries currently live in code (`AGENT_SYSTEM_PROMPTS`, `spec/tool_contracts/*.json`). Extracting them to a `config/` directory that the runtime loads at startup would allow domain configuration changes without code deploys. The spec foundation is in `spec/auth_model.md` and the tool contract schema.
+
+**Docker Compose packaging** — a single `docker compose up` that starts Postgres, runs migrations, and starts the API. Currently requires `make db-up && make dev` separately and manual migration via psql pipe. Packaging this simplifies onboarding and enables CI integration testing without a pre-existing Postgres instance.
+
+**OpenTelemetry traces** — the runtime writes a complete audit event log per run (`GET /v1/runs/{id}/events`), but no distributed traces. Adding OTel spans to `_run_turn`, the command worker dispatch loop, and provider adapter calls would make the governed action lifecycle visible in Grafana, Jaeger, or any OTel backend. This is the production observability story.
+
+**Second domain adapter** — the payroll domain is the reference implementation. A second adapter (HR case management, booking, or a generic webhook-out stub) would validate that the provider adapter contract (`adapters/adapter_interface.py`) is genuinely domain-agnostic and not accidentally payroll-specific. The conformance test suite in `conformance/test_core_endpoints.py` is already abstract.
+
+**Competitive testing** — hands-on evaluation of AxonFlow, JamJet, and Tandem against the design goals in the [Design goals](#design-goals) section. Findings will be documented in `docs/competitor-notes/`. The Design goals section currently reflects intent, not tested differentiation.
 
 ---
 
