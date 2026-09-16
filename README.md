@@ -25,7 +25,7 @@ This runtime is that layer, built once, as a protocol, separate from the model.
 
 ## Two layers
 
-```
+```text
 Your agent (Claude, OpenAI, LangGraph, anything)
       |
       | POST /v1/tool-calls
@@ -86,7 +86,7 @@ See [`client_example.py`](client_example.py) for a full 8-step end-to-end walkth
 
 The model output is a tool request. The runtime response is not necessarily a tool result:
 
-```
+```http
 POST /v1/tool-calls
 Idempotency-Key: tc-run_123-EMP4412-001   ← include on every mutation
 
@@ -152,7 +152,7 @@ A command does not exist until a human approves and the runtime confirms the res
 
 ## Golden event sequence
 
-```
+```text
 tool_call.received
 proposal.created
 policy.evaluated
@@ -188,42 +188,38 @@ This runtime is designed around a specific set of goals. We have not yet done ha
 
 ## Action boundary endpoints (core protocol)
 
-```
-POST /v1/tool-calls                            ← primary entry point
-GET  /v1/tool-calls/{tool_call_id}
-
-GET  /v1/proposals/{proposal_id}
-GET  /v1/proposals/{proposal_id}/versions
-GET  /v1/proposals/{proposal_id}/versions/{version}
-
-GET  /v1/approvals
-GET  /v1/approvals/{approval_id}
-POST /v1/approvals/{approval_id}/claim
-POST /v1/approvals/{approval_id}/release
-POST /v1/approvals/{approval_id}/approve
-POST /v1/approvals/{approval_id}/reject
-POST /v1/approvals/{approval_id}/revise
-
-GET  /v1/commands
-GET  /v1/commands/{command_id}
-GET  /v1/commands/{command_id}/attempts
-POST /v1/commands/{command_id}/reconcile
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/tool-calls` | Primary entry point — submit a model tool request |
+| GET | `/v1/tool-calls/{tool_call_id}` | Get a submitted tool call |
+| GET | `/v1/proposals/{proposal_id}` | Get a proposal |
+| GET | `/v1/proposals/{proposal_id}/versions` | List all versions of a proposal |
+| GET | `/v1/proposals/{proposal_id}/versions/{version}` | Get a specific proposal version |
+| GET | `/v1/approvals` | List approvals |
+| GET | `/v1/approvals/{approval_id}` | Get an approval with proposal and evidence |
+| POST | `/v1/approvals/{approval_id}/claim` | Claim an approval for review |
+| POST | `/v1/approvals/{approval_id}/release` | Release a claim without deciding |
+| POST | `/v1/approvals/{approval_id}/approve` | Approve a proposal version — triggers dispatch |
+| POST | `/v1/approvals/{approval_id}/reject` | Reject a proposal version |
+| POST | `/v1/approvals/{approval_id}/revise` | Revise a proposal — creates a new immutable version |
+| GET | `/v1/commands` | List commands |
+| GET | `/v1/commands/{command_id}` | Get command state and lifecycle |
+| GET | `/v1/commands/{command_id}/attempts` | Get dispatch attempts for a command |
+| POST | `/v1/commands/{command_id}/reconcile` | Trigger provider reconciliation for unknown state |
 
 ## Managed run endpoints (optional reference runtime)
 
-```
-POST /v1/runs
-GET  /v1/runs/{run_id}
-POST /v1/runs/{run_id}/messages
-GET  /v1/runs/{run_id}/events
-POST /v1/runs/{run_id}/cancel
-POST /v1/runs/{run_id}/replay       (planned)
-
-POST /v1/runs/{run_id}/handoffs     ← Phase 4: trigger a handoff externally
-GET  /v1/runs/{run_id}/handoffs     (planned)
-GET  /v1/handoffs/{handoff_id}      ← Phase 4: get handoff state
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/runs` | Create a run |
+| GET | `/v1/runs/{run_id}` | Get run state |
+| POST | `/v1/runs/{run_id}/messages` | Send a message or resume after approval (empty body = resume) |
+| GET | `/v1/runs/{run_id}/events` | Append-only audit event log |
+| POST | `/v1/runs/{run_id}/cancel` | Cancel a run |
+| POST | `/v1/runs/{run_id}/replay` | Replay a run *(planned)* |
+| POST | `/v1/runs/{run_id}/handoffs` | Trigger an agent handoff externally |
+| GET | `/v1/runs/{run_id}/handoffs` | List handoffs for a run *(planned)* |
+| GET | `/v1/handoffs/{handoff_id}` | Get handoff state |
 
 ---
 
