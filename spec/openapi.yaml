@@ -221,7 +221,7 @@ paths:
             example:
               agent_id: payroll-detective
       responses:
-        "201":
+        "200":
           description: Run created
           headers:
             X-Idempotency-Replayed:
@@ -240,6 +240,7 @@ paths:
     get:
       operationId: listRuns
       summary: List runs
+      description: Not yet implemented — planned.
       tags: [managed-runs]
       parameters:
         - name: agent_id
@@ -348,7 +349,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/EventList"
+                type: array
+                items:
+                  $ref: "#/components/schemas/RunEvent"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -358,6 +361,7 @@ paths:
     get:
       operationId: getRunState
       summary: Get full run state snapshot
+      description: Not yet implemented — planned.
       tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/RunId"
@@ -377,6 +381,7 @@ paths:
     get:
       operationId: listToolCalls
       summary: List tool calls for a run
+      description: Not yet implemented — planned.
       tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/RunId"
@@ -419,7 +424,14 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Run"
+                type: object
+                required: [run_id, status]
+                properties:
+                  run_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [cancelled]
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -434,6 +446,8 @@ paths:
       operationId: replayRun
       summary: Replay a run
       description: |
+        Not yet implemented — planned.
+
         Reconstructs or continues a run without repeating completed side effects.
 
         Modes:
@@ -923,6 +937,7 @@ paths:
     get:
       operationId: listRunHandoffs
       summary: List handoffs for a run
+      description: Not yet implemented — planned.
       tags: [handoffs]
       parameters:
         - $ref: "#/components/parameters/RunId"
@@ -1726,6 +1741,11 @@ components:
       properties:
         agent_id:
           type: string
+        agent_version:
+          type: string
+        system_prompt:
+          type: string
+          description: Override the default system prompt for this run. If omitted, the runtime selects a prompt based on agent_id.
         metadata:
           type: object
           additionalProperties: true
@@ -1733,10 +1753,13 @@ components:
 
     SendMessageRequest:
       type: object
-      required: [content]
       properties:
         content:
           type: string
+          description: |
+            User message text. Omit (or send an empty body) to resume a run that
+            is paused at status: awaiting_approval — the runtime will check whether
+            the pending approval's command has succeeded and continue the conversation.
 
     ReplayRequest:
       type: object
@@ -1811,35 +1834,32 @@ components:
 
     MessageResponse:
       type: object
-      required: [run_id, request_id, status, terminal]
+      required: [run_id, status]
       properties:
         run_id:
           type: string
-        request_id:
-          type: string
-        idempotency_key:
-          type: string
-        idempotency_replayed:
-          type: boolean
         status:
           $ref: "#/components/schemas/RunStatus"
-        terminal:
-          type: boolean
-          description: True only when the run has reached a terminal state
-        assistant_message:
-          $ref: "#/components/schemas/Message"
+        message:
+          type: object
+          description: The assistant's response message. Present when the model produced a reply.
+          properties:
+            role:
+              type: string
+              enum: [assistant]
+            content:
+              type: string
         pending_approval:
           $ref: "#/components/schemas/PendingApprovalRef"
-        next_actions:
-          type: array
-          items:
-            type: string
 
     PendingApprovalRef:
       type: object
       properties:
         approval_id:
           type: string
+        risk_level:
+          type: string
+          enum: [low, medium, high]
         proposal_id:
           type: string
         proposal_version:
