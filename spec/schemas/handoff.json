@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/handoff.json",
+  "title": "Handoff",
+  "description": "An agent-to-agent transfer. The receiving agent receives a scoped context package, not the full session.",
+  "type": "object",
+  "required": [
+    "handoff_id", "run_id", "tenant_id",
+    "from_agent", "to_agent", "handoff_type",
+    "user_visible", "status", "created_at"
+  ],
+  "properties": {
+    "handoff_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "from_agent": {
+      "type": "string"
+    },
+    "to_agent": {
+      "type": "string"
+    },
+    "handoff_type": {
+      "type": "string",
+      "enum": ["internal_handoff", "user_visible_handoff", "human_escalation"]
+    },
+    "user_visible": {
+      "type": "boolean",
+      "description": "True for user_visible_handoff and human_escalation. False for internal_handoff."
+    },
+    "context_package": {
+      "$ref": "context_package.json"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["created", "completed", "failed"]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

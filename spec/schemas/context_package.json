@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/context_package.json",
+  "title": "ContextPackage",
+  "description": "Scoped information passed to the receiving agent on handoff. Not the full session — only what the sending agent explicitly surfaces.",
+  "type": "object",
+  "required": ["summary"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Plain-language description of what was done and why the handoff occurred."
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "References to evidence snapshots the receiving agent may consult."
+    },
+    "current_resource_state": {
+      "type": ["object", "null"],
+      "description": "Snapshot of the affected resource at handoff time."
+    },
+    "outstanding_questions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Questions the sending agent could not resolve."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Domain-specific key-value context."
+    }
+  },
+  "additionalProperties": false
+}

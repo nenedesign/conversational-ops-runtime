@@ -1,0 +1,1924 @@
+openapi: "3.1.0"
+
+info:
+  title: Conversational Operations Runtime API
+  version: "2026-09-01"
+  description: |
+    A governed action boundary for AI agents. Turns model tool requests into
+    policy-checked, approval-gated, idempotent, auditable business operations.
+
+    The model proposes. The action service decides.
+
+    This runtime is model-neutral. Agents built with Claude, OpenAI, LangGraph,
+    or any custom orchestrator submit tool requests to the same API and receive
+    the same governed response.
+
+    ## Resource model
+
+    | Resource | What it represents |
+    |----------|-------------------|
+    | `Run` | An agent session — owns the lifecycle from first message to completion |
+    | `ToolCall` | What the model requested — recorded when model output is received |
+    | `Proposal` | What the system recommends doing — created from a tool call |
+    | `ProposalVersion` | One immutable version of a proposal |
+    | `Approval` | A human decision on a specific proposal version |
+    | `Command` | An authorized side effect — created only after final authorization passes |
+    | `CommandAttempt` | One provider dispatch attempt |
+    | `Handoff` | An agent-to-agent state transition |
+
+    ## Idempotency
+
+    All mutation endpoints accept an `Idempotency-Key` header. If the same key
+    is seen within the applicable retention window, the stored response is returned
+    with no side effects and `X-Idempotency-Replayed: true`.
+
+    If a key is reused with a different method, path, tenant, or request body,
+    the response is `409 Conflict`.
+
+  contact:
+    name: Neville Ko
+    url: https://fromus.ca
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://api.conversational-ops.dev
+    description: Hosted sandbox
+
+security:
+  - BearerToken: []
+
+tags:
+  - name: runs
+    description: Agent session lifecycle
+  - name: proposals
+    description: System recommendations for action
+  - name: approvals
+    description: Human decisions on proposals
+  - name: commands
+    description: Authorized side effects and dispatch
+  - name: handoffs
+    description: Agent-to-agent state transitions
+  - name: config
+    description: Agent and policy configuration (read-only Phase 1)
+
+paths:
+
+  # ─────────────────────────────────────────────
+  # RUNS
+  # ─────────────────────────────────────────────
+
+  /v1/runs:
+    post:
+      operationId: createRun
+      summary: Start an agent run
+      description: |
+        Creates a new agent run. The tenant is derived from the authenticated
+        credential — do not supply tenant_id in the request body.
+      tags: [runs]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRunRequest"
+            example:
+              agent_id: payroll-detective
+      responses:
+        "201":
+          description: Run created
+          headers:
+            X-Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+
+    get:
+      operationId: listRuns
+      summary: List runs
+      tags: [runs]
+      parameters:
+        - name: agent_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/RunStatus"
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated run list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/runs/{run_id}:
+    get:
+      operationId: getRun
+      summary: Get run state
+      tags: [runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/runs/{run_id}/messages:
+    post:
+      operationId: sendMessage
+      summary: Send a message to a run
+      description: |
+        Sends a user message to a running agent session. The response is
+        `202 Accepted` when the run continues processing asynchronously —
+        which is the normal case. `200 OK` is returned only if the run
+        completes synchronously.
+      tags: [runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageRequest"
+            example:
+              content: "Investigate the payroll anomaly for EMP-4412."
+      responses:
+        "202":
+          description: Message accepted — run is processing asynchronously
+          headers:
+            X-Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "200":
+          description: Message processed — run completed synchronously (rare)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "422":
+          $ref: "#/components/responses/InvalidStateTransition"
+
+  /v1/runs/{run_id}/events:
+    get:
+      operationId: listRunEvents
+      summary: List run events
+      description: |
+        Returns the append-only event log for a run. This is the reliable recovery
+        source when a webhook is missed. Webhooks are delivery mechanisms; the
+        event stream is the source of truth.
+      tags: [runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Event page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/runs/{run_id}/state:
+    get:
+      operationId: getRunState
+      summary: Get full run state snapshot
+      tags: [runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Full run state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunState"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/runs/{run_id}/tool_calls:
+    get:
+      operationId: listToolCalls
+      summary: List tool calls for a run
+      tags: [runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Tool calls
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tool_calls:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ToolCall"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/runs/{run_id}/cancel:
+    post:
+      operationId: cancelRun
+      summary: Cancel a run
+      tags: [runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Run cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "422":
+          $ref: "#/components/responses/InvalidStateTransition"
+
+  /v1/runs/{run_id}/replay:
+    post:
+      operationId: replayRun
+      summary: Replay a run
+      description: |
+        Reconstructs or continues a run without repeating completed side effects.
+
+        Modes:
+        - `inspect`: Reconstruct prior state from persisted events. No model calls.
+          No tool calls. No side effects.
+        - `simulate`: Live model calls. Provider calls go to mock or sandbox adapters
+          only. No real side effects.
+        - `fork`: Create a new run branching from a state snapshot. Defaults to
+          sandbox. Production requires explicit `execution_target: production` and
+          `confirm_production: true`.
+        - `resume`: Continue an interrupted run from the last recognized resumable
+          state. Identifies the last completed side effect and resumes from the next
+          state without repeating it.
+      tags: [runs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayRequest"
+            examples:
+              inspect:
+                value:
+                  mode: inspect
+              simulate:
+                value:
+                  mode: simulate
+                  from_state_version: 10
+              fork_sandbox:
+                value:
+                  mode: fork
+                  from_state_version: 10
+                  execution_target: sandbox
+                  fork_reason: "Test alternate approval outcome"
+              fork_production:
+                value:
+                  mode: fork
+                  from_state_version: 10
+                  execution_target: production
+                  confirm_production: true
+                  fork_reason: "Resume after system failure"
+      responses:
+        "202":
+          description: Replay started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+
+  # ─────────────────────────────────────────────
+  # PROPOSALS
+  # ─────────────────────────────────────────────
+
+  /v1/proposals/{proposal_id}:
+    get:
+      operationId: getProposal
+      summary: Get a proposal
+      tags: [proposals]
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      responses:
+        "200":
+          description: Proposal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Proposal"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/proposals/{proposal_id}/versions:
+    get:
+      operationId: listProposalVersions
+      summary: List all versions of a proposal
+      tags: [proposals]
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+      responses:
+        "200":
+          description: Proposal versions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProposalVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/proposals/{proposal_id}/versions/{version}:
+    get:
+      operationId: getProposalVersion
+      summary: Get a specific proposal version
+      tags: [proposals]
+      parameters:
+        - $ref: "#/components/parameters/ProposalId"
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Proposal version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProposalVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─────────────────────────────────────────────
+  # APPROVALS
+  # ─────────────────────────────────────────────
+
+  /v1/approvals:
+    get:
+      operationId: listApprovals
+      summary: List approvals
+      description: |
+        Returns approvals visible to the authenticated user. Supports queue views
+        for approval console: filter by status, assigned role, or assigned user.
+      tags: [approvals]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/ApprovalStatus"
+        - name: assigned_to
+          in: query
+          description: Filter by assigned role ID or "me" for current user
+          schema:
+            type: string
+        - name: run_id
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated approval list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/approvals/{approval_id}:
+    get:
+      operationId: getApproval
+      summary: Get an approval with proposal and evidence
+      tags: [approvals]
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+      responses:
+        "200":
+          description: Approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/approvals/{approval_id}/claim:
+    post:
+      operationId: claimApproval
+      summary: Claim an approval for review
+      description: |
+        Reserves this approval for the authenticated user. Prevents two approvers
+        from acting on the same item simultaneously. A claimed approval must be
+        released before another user can claim it.
+      tags: [approvals]
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Approval claimed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "422":
+          $ref: "#/components/responses/InvalidStateTransition"
+
+  /v1/approvals/{approval_id}/release:
+    post:
+      operationId: releaseApproval
+      summary: Release an approval claim without deciding
+      tags: [approvals]
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Approval released
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+
+  /v1/approvals/{approval_id}/approve:
+    post:
+      operationId: approveApproval
+      summary: Approve a proposal version
+      description: |
+        Records an approval decision on the specified proposal version.
+        The Action Service re-evaluates authorization and re-checks resource
+        state before creating the command. The command is only created if
+        authorization.passed.
+      tags: [approvals]
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveRequest"
+            example:
+              proposal_version: 2
+              approver_note: "Reviewed cited records. Escalation warranted."
+      responses:
+        "200":
+          description: Approval recorded
+          headers:
+            X-Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "422":
+          $ref: "#/components/responses/StaleApproval"
+
+  /v1/approvals/{approval_id}/reject:
+    post:
+      operationId: rejectApproval
+      summary: Reject a proposal version
+      tags: [approvals]
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectRequest"
+            example:
+              proposal_version: 1
+              reason: "Insufficient evidence. Request additional documentation."
+      responses:
+        "200":
+          description: Rejection recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+
+  /v1/approvals/{approval_id}/revise:
+    post:
+      operationId: reviseApproval
+      summary: Revise a proposal — creates a new proposal version
+      description: |
+        Creates a new proposal version based on the specified base version.
+        The prior version is never mutated. The approval returns to pending
+        state and the previous claim is invalidated — the new version must
+        be reviewed.
+      tags: [approvals]
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviseRequest"
+            example:
+              base_proposal_version: 1
+              changes:
+                next_step: open_legal_review_case
+              reason: "Escalate for legal review."
+      responses:
+        "200":
+          description: New proposal version created — approval returned to pending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+
+  # ─────────────────────────────────────────────
+  # COMMANDS
+  # ─────────────────────────────────────────────
+
+  /v1/commands:
+    get:
+      operationId: listCommands
+      summary: List commands
+      tags: [commands]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/CommandStatus"
+        - name: run_id
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/After"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated command list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/commands/{command_id}:
+    get:
+      operationId: getCommand
+      summary: Get command state and lifecycle
+      tags: [commands]
+      parameters:
+        - $ref: "#/components/parameters/CommandId"
+      responses:
+        "200":
+          description: Command
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Command"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/commands/{command_id}/reconcile:
+    post:
+      operationId: reconcileCommand
+      summary: Trigger manual reconciliation
+      description: |
+        Queries the provider by idempotency key to resolve an unknown outcome.
+        Only valid when command status is `unknown` or `reconciliation_required`.
+        Do not retry automatically before reconciliation completes.
+      tags: [commands]
+      parameters:
+        - $ref: "#/components/parameters/CommandId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Reconciliation triggered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Command"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "422":
+          $ref: "#/components/responses/InvalidStateTransition"
+
+  /v1/commands/{command_id}/attempts:
+    get:
+      operationId: listCommandAttempts
+      summary: Get dispatch attempts for a command
+      tags: [commands]
+      parameters:
+        - $ref: "#/components/parameters/CommandId"
+      responses:
+        "200":
+          description: Command attempts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  attempts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CommandAttempt"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─────────────────────────────────────────────
+  # HANDOFFS
+  # ─────────────────────────────────────────────
+
+  /v1/runs/{run_id}/handoffs:
+    post:
+      operationId: createHandoff
+      summary: Trigger an agent handoff
+      tags: [handoffs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateHandoffRequest"
+      responses:
+        "202":
+          description: Handoff initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Handoff"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+
+    get:
+      operationId: listRunHandoffs
+      summary: List handoffs for a run
+      tags: [handoffs]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Handoffs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  handoffs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Handoff"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/handoffs/{handoff_id}:
+    get:
+      operationId: getHandoff
+      summary: Get handoff state
+      tags: [handoffs]
+      parameters:
+        - name: handoff_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Handoff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Handoff"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─────────────────────────────────────────────
+  # CONFIGURATION (read-only Phase 1)
+  # ─────────────────────────────────────────────
+
+  /v1/agents:
+    get:
+      operationId: listAgents
+      summary: List registered agents
+      tags: [config]
+      responses:
+        "200":
+          description: Agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Agent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /v1/agents/{agent_id}:
+    get:
+      operationId: getAgent
+      summary: Get agent configuration
+      tags: [config]
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /v1/tools:
+    get:
+      operationId: listTools
+      summary: List registered tools
+      tags: [config]
+      responses:
+        "200":
+          description: Tools
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Tool"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+# ─────────────────────────────────────────────
+# WEBHOOKS
+# ─────────────────────────────────────────────
+
+webhooks:
+  run.started:
+    post:
+      summary: Run created and started
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Acknowledged
+
+  run.approval_required:
+    post:
+      summary: Run paused — human approval required
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Acknowledged
+
+  run.completed:
+    post:
+      summary: Run completed successfully
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Acknowledged
+
+  run.failed:
+    post:
+      summary: Run failed
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Acknowledged
+
+  approval.approved:
+    post:
+      summary: Approval decision recorded
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Acknowledged
+
+  approval.expired:
+    post:
+      summary: Approval expired without decision
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Acknowledged
+
+  command.succeeded:
+    post:
+      summary: Command executed successfully
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Acknowledged
+
+  command.unknown:
+    post:
+      summary: Command outcome unknown — reconciliation required
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Acknowledged
+
+# ─────────────────────────────────────────────
+# COMPONENTS
+# ─────────────────────────────────────────────
+
+components:
+
+  securitySchemes:
+    BearerToken:
+      type: http
+      scheme: bearer
+      description: |
+        API key or OAuth bearer token. Tenant identity is derived from the
+        authenticated credential — do not supply tenant_id in request bodies.
+
+  parameters:
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Run identifier
+
+    ProposalId:
+      name: proposal_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+    ApprovalId:
+      name: approval_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+    CommandId:
+      name: command_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+      description: |
+        Client-generated key for idempotent mutation. Format:
+        `<prefix>-<resource_id>-<client_nonce>` e.g. `msg-run_123-7f3a2c`.
+        If the same key is seen within the retention window, the stored response
+        is returned with no side effects. Reuse with a different method, path,
+        tenant, or request body returns 409 Conflict.
+
+    After:
+      name: after
+      in: query
+      schema:
+        type: string
+      description: Cursor for pagination — ID of the last item on the previous page
+
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  headers:
+    IdempotencyReplayed:
+      description: True if this response was replayed from a stored idempotent result
+      schema:
+        type: boolean
+
+  schemas:
+
+    # ── Enums ────────────────────────────────
+
+    RunStatus:
+      type: string
+      enum:
+        - created
+        - running
+        - awaiting_user
+        - awaiting_approval
+        - awaiting_external
+        - escalated
+        - completed
+        - failed
+        - cancelled
+
+    ProposalStatus:
+      type: string
+      enum:
+        - drafted
+        - awaiting_approval
+        - approved
+        - rejected
+        - expired
+
+    ApprovalStatus:
+      type: string
+      enum:
+        - pending
+        - claimed
+        - revised
+        - approved
+        - rejected
+        - released
+        - expired
+
+    CommandStatus:
+      type: string
+      enum:
+        - created
+        - authorized
+        - dispatched
+        - succeeded
+        - failed
+        - unknown
+        - reconciliation_required
+
+    HandoffType:
+      type: string
+      enum:
+        - internal_handoff
+        - user_visible_handoff
+        - human_escalation
+
+    ReplayMode:
+      type: string
+      enum:
+        - inspect
+        - simulate
+        - fork
+        - resume
+
+    ExecutionTarget:
+      type: string
+      enum:
+        - sandbox
+        - production
+
+    # ── Core resources ───────────────────────
+
+    Run:
+      type: object
+      required: [run_id, tenant_id, status, agent_id, created_at]
+      properties:
+        run_id:
+          type: string
+        tenant_id:
+          type: string
+        conversation_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        state_version:
+          type: integer
+        agent_id:
+          type: string
+        agent_version:
+          type: string
+        model_provider:
+          type: string
+        model_id:
+          type: string
+        prompt_version:
+          type: string
+        tool_schema_version:
+          type: string
+        pending_approval:
+          $ref: "#/components/schemas/PendingApprovalRef"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    RunState:
+      type: object
+      properties:
+        run:
+          $ref: "#/components/schemas/Run"
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCall"
+        pending_approval:
+          $ref: "#/components/schemas/Approval"
+
+    Message:
+      type: object
+      required: [id, role, content, created_at]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ToolCall:
+      type: object
+      required: [tool_call_id, run_id, tool_name, arguments, status, created_at]
+      properties:
+        tool_call_id:
+          type: string
+        run_id:
+          type: string
+        tool_name:
+          type: string
+        arguments:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [pending, completed, rejected, proposal_created]
+        result:
+          type: object
+          additionalProperties: true
+        proposal_id:
+          type: string
+          description: Set when the tool call resulted in a proposal
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    Proposal:
+      type: object
+      required: [proposal_id, run_id, tool_call_id, status, current_version, created_at]
+      properties:
+        proposal_id:
+          type: string
+        run_id:
+          type: string
+        tool_call_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/ProposalStatus"
+        current_version:
+          type: integer
+          minimum: 1
+        approved_version:
+          type: integer
+          description: Set only when status is approved
+        approval_id:
+          type: string
+          description: Set only when status is approved
+        created_at:
+          type: string
+          format: date-time
+
+    ProposalVersion:
+      type: object
+      required: [version, proposal_id, content, created_by, created_at]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        proposal_id:
+          type: string
+        content:
+          type: object
+          description: The reviewable action plan — domain-specific structure
+          additionalProperties: true
+        evidence_ids:
+          type: array
+          items:
+            type: string
+        policy_version:
+          type: string
+        uncertainty_statement:
+          type: string
+          description: |
+            Required when the agent cannot determine the outcome with confidence.
+            Describes what is unknown and why human review is needed.
+        created_by:
+          type: string
+          description: actor_id of the creator (agent ID or user ID for revisions)
+        created_by_type:
+          type: string
+          enum: [agent, user, system]
+        reason:
+          type: string
+          description: Why this version was created (initial, human_revision, stale_recalculation)
+        created_at:
+          type: string
+          format: date-time
+
+    Approval:
+      type: object
+      required: [approval_id, proposal_id, status, created_at]
+      properties:
+        approval_id:
+          type: string
+        proposal_id:
+          type: string
+        run_id:
+          type: string
+        current_proposal_version:
+          type: integer
+        status:
+          $ref: "#/components/schemas/ApprovalStatus"
+        expires_at:
+          type: string
+          format: date-time
+        assigned_to:
+          $ref: "#/components/schemas/AssignmentTarget"
+        claimed_by:
+          type: string
+          description: actor_id of the current claimant
+        claimed_at:
+          type: string
+          format: date-time
+        approver_id:
+          type: string
+        approver_note:
+          type: string
+        decided_proposal_version:
+          type: integer
+          description: The proposal version that was approved or rejected
+        decided_at:
+          type: string
+          format: date-time
+        resulting_command_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Command:
+      type: object
+      required: [command_id, run_id, tool_name, status, idempotency_key, created_at]
+      properties:
+        command_id:
+          type: string
+        run_id:
+          type: string
+        tool_call_id:
+          type: string
+        proposal_id:
+          type: string
+        proposal_version:
+          type: integer
+          description: The exact approved proposal version this command executes
+        approval_id:
+          type: string
+        tenant_id:
+          type: string
+        actor_id:
+          type: string
+        tool_name:
+          type: string
+        validated_arguments:
+          type: object
+          additionalProperties: true
+        policy_decision_id:
+          type: string
+        idempotency_key:
+          type: string
+        resource_version:
+          type: integer
+        expected_state_hash:
+          type: string
+        status:
+          $ref: "#/components/schemas/CommandStatus"
+        downstream_reference:
+          type: string
+          description: Provider transaction ID — set on succeeded
+        created_at:
+          type: string
+          format: date-time
+        dispatched_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    CommandAttempt:
+      type: object
+      required: [attempt_id, command_id, attempt_number, created_at]
+      properties:
+        attempt_id:
+          type: string
+        command_id:
+          type: string
+        attempt_number:
+          type: integer
+          minimum: 1
+        worker_id:
+          type: string
+        status:
+          type: string
+          enum: [in_progress, succeeded, failed, unknown]
+        provider_reference:
+          type: string
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    Handoff:
+      type: object
+      required: [handoff_id, run_id, from_agent, to_agent, handoff_type, status, created_at]
+      properties:
+        handoff_id:
+          type: string
+        run_id:
+          type: string
+        from_agent:
+          type: string
+        to_agent:
+          type: string
+        handoff_type:
+          $ref: "#/components/schemas/HandoffType"
+        reason:
+          type: string
+        required_scopes:
+          type: array
+          items:
+            type: string
+        user_visible:
+          type: boolean
+        requires_user_consent:
+          type: boolean
+        status:
+          type: string
+          enum: [initiated, active, completed, failed]
+        context_package:
+          $ref: "#/components/schemas/ContextPackage"
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    ContextPackage:
+      type: object
+      description: Scoped context transferred between agents. Not the full session.
+      properties:
+        user_request:
+          type: string
+        structured_facts:
+          type: object
+          additionalProperties: true
+        evidence_ids:
+          type: array
+          items:
+            type: string
+        tool_call_results:
+          type: array
+          items:
+            type: string
+        uncertainty_statement:
+          type: string
+        policy_state:
+          type: object
+          additionalProperties: true
+
+    RunEvent:
+      type: object
+      required: [event_id, sequence, type, occurred_at, recorded_at, producer]
+      properties:
+        event_id:
+          type: string
+        sequence:
+          type: integer
+          description: Per-run monotonically increasing sequence number
+        run_version:
+          type: integer
+        type:
+          type: string
+          description: Event type — see golden_sequence.json for full lifecycle
+        occurred_at:
+          type: string
+          format: date-time
+          description: When the event occurred in business terms
+        recorded_at:
+          type: string
+          format: date-time
+          description: When the event was persisted
+        causation_id:
+          type: string
+          description: ID of the event or request that caused this event
+        correlation_id:
+          type: string
+          description: Run ID — links all events in a run
+        producer:
+          type: string
+          enum: [agent-api, action-service, command-worker, system]
+        data:
+          type: object
+          additionalProperties: true
+
+    Agent:
+      type: object
+      properties:
+        agent_id:
+          type: string
+        version:
+          type: string
+        tool_ids:
+          type: array
+          items:
+            type: string
+        confidence_threshold:
+          type: number
+        escalate_to:
+          type: string
+
+    Tool:
+      type: object
+      properties:
+        tool_id:
+          type: string
+        description:
+          type: string
+        requires_approval:
+          type: boolean
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        input_schema:
+          type: object
+          additionalProperties: true
+
+    WebhookEvent:
+      type: object
+      required: [id, type, created_at, tenant_id, api_version]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        sequence:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        tenant_id:
+          type: string
+        run_id:
+          type: string
+        resource:
+          type: object
+          properties:
+            type:
+              type: string
+            id:
+              type: string
+        data:
+          type: object
+          additionalProperties: true
+        api_version:
+          type: string
+          example: "2026-09-01"
+
+    # ── Request bodies ───────────────────────
+
+    CreateRunRequest:
+      type: object
+      required: [agent_id]
+      properties:
+        agent_id:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Caller-defined metadata stored on the run
+
+    SendMessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+
+    ReplayRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          $ref: "#/components/schemas/ReplayMode"
+        from_state_version:
+          type: integer
+        execution_target:
+          $ref: "#/components/schemas/ExecutionTarget"
+          default: sandbox
+        confirm_production:
+          type: boolean
+          description: |
+            Must be true when execution_target is production. Prevents
+            accidental production commits from fork mode.
+          default: false
+        fork_reason:
+          type: string
+
+    ApproveRequest:
+      type: object
+      required: [proposal_version]
+      properties:
+        proposal_version:
+          type: integer
+          minimum: 1
+          description: The proposal version being approved — must match current_version
+        approver_note:
+          type: string
+
+    RejectRequest:
+      type: object
+      required: [proposal_version, reason]
+      properties:
+        proposal_version:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+
+    ReviseRequest:
+      type: object
+      required: [base_proposal_version, changes, reason]
+      properties:
+        base_proposal_version:
+          type: integer
+          minimum: 1
+          description: The version being revised — prior version is never mutated
+        changes:
+          type: object
+          additionalProperties: true
+          description: Fields to change in the proposal content
+        reason:
+          type: string
+
+    CreateHandoffRequest:
+      type: object
+      required: [to_agent, handoff_type, reason]
+      properties:
+        to_agent:
+          type: string
+        handoff_type:
+          $ref: "#/components/schemas/HandoffType"
+        reason:
+          type: string
+        context_package:
+          $ref: "#/components/schemas/ContextPackage"
+
+    # ── Response shapes ──────────────────────
+
+    MessageResponse:
+      type: object
+      required: [run_id, request_id, status, terminal]
+      properties:
+        run_id:
+          type: string
+        request_id:
+          type: string
+        idempotency_key:
+          type: string
+        idempotency_replayed:
+          type: boolean
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        terminal:
+          type: boolean
+          description: True only when the run has reached a terminal state
+        assistant_message:
+          $ref: "#/components/schemas/Message"
+        pending_approval:
+          $ref: "#/components/schemas/PendingApprovalRef"
+        next_actions:
+          type: array
+          items:
+            type: string
+
+    PendingApprovalRef:
+      type: object
+      properties:
+        approval_id:
+          type: string
+        proposal_id:
+          type: string
+        proposal_version:
+          type: integer
+
+    ReplayResponse:
+      type: object
+      properties:
+        mode:
+          $ref: "#/components/schemas/ReplayMode"
+        source_run_id:
+          type: string
+        source_state_version:
+          type: integer
+        source_event_id:
+          type: string
+        forked_run_id:
+          type: string
+          description: Set only for fork mode
+        forked_by:
+          type: string
+        fork_reason:
+          type: string
+        execution_target:
+          $ref: "#/components/schemas/ExecutionTarget"
+
+    RunList:
+      type: object
+      required: [runs, has_more]
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Run"
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    ApprovalList:
+      type: object
+      required: [approvals, has_more]
+      properties:
+        approvals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Approval"
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    CommandList:
+      type: object
+      required: [commands, has_more]
+      properties:
+        commands:
+          type: array
+          items:
+            $ref: "#/components/schemas/Command"
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    EventList:
+      type: object
+      required: [events, has_more]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunEvent"
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+
+    AssignmentTarget:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [role, user]
+        id:
+          type: string
+
+    # ── Error model ──────────────────────────
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum:
+                - invalid_tool_request
+                - permission_denied
+                - tenant_mismatch
+                - separation_of_duties_violation
+                - invalid_state_transition
+                - idempotency_conflict
+                - stale_approval
+                - approval_expired
+                - provider_capability_mismatch
+                - unknown_outcome
+                - reconciliation_required
+                - unsupported_operation
+                - authentication_required
+            message:
+              type: string
+            request_id:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Invalid request body or parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: invalid_tool_request
+              message: "Tool arguments failed schema validation."
+              request_id: req_123
+              details:
+                field: employee_id
+                issue: required
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: authentication_required
+              message: "A valid bearer token is required."
+              request_id: req_123
+
+    Forbidden:
+      description: Authenticated but not authorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: permission_denied
+              message: "The approver is the requestor. Separation of duties required."
+              request_id: req_123
+              details:
+                approval_id: approval_234
+                required_scope: approvals:decide
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    IdempotencyConflict:
+      description: Idempotency key reused with a different request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: idempotency_conflict
+              message: "This idempotency key was used for a different request."
+              request_id: req_456
+              details:
+                original_request_id: req_123
+                original_created_at: "2026-09-16T14:23:00Z"
+
+    InvalidStateTransition:
+      description: The operation is not valid in the current state
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: invalid_state_transition
+              message: "Cannot approve a rejected approval."
+              request_id: req_123
+              details:
+                current_status: rejected
+                attempted_transition: approve
+
+    StaleApproval:
+      description: Resource state changed after approval was recorded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: stale_approval
+              message: "The affected resource changed after approval."
+              request_id: req_123
+              details:
+                expected_version: 18
+                actual_version: 19
+                approval_id: approval_234

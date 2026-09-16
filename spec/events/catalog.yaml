@@ -1,0 +1,224 @@
+name: Conversational Operations Runtime — Webhook Event Catalog
+version: "2026-09-01"
+description: |
+  All webhook events emitted by the runtime. The event stream at
+  GET /v1/runs/{run_id}/events is the source of truth for event ordering.
+  Webhooks are at-least-once delivery mechanisms — use event_id for deduplication.
+
+delivery:
+  signature: HMAC-SHA256 over the raw request body using the tenant webhook secret
+  signature_header: X-Webhook-Signature
+  timestamp_header: X-Webhook-Timestamp
+  timestamp_tolerance_seconds: 300
+  deduplication_field: id
+  delivery_guarantee: at_least_once
+  retry_policy: exponential_backoff
+  max_attempts: 10
+  replay_endpoint: POST /v1/webhooks/replay
+
+envelope:
+  fields:
+    id: Unique event ID for deduplication
+    type: Event type string (see events below)
+    sequence: Per-run monotonic sequence number
+    created_at: ISO 8601 timestamp when event was recorded
+    tenant_id: Tenant scope
+    run_id: Associated run (null for tenant-level events)
+    resource: "{ type, id } — the primary resource this event concerns"
+    data: Event-specific payload
+    api_version: API version at time of emission
+
+events:
+
+  # ── Run events ────────────────────────────
+
+  - type: run.started
+    description: Agent run created and activated.
+    producer: agent-api
+    resource_type: run
+    data_fields:
+      agent_id: string
+      model_id: string
+
+  - type: run.approval_required
+    description: Run paused. Human approval required before execution continues.
+    producer: agent-api
+    resource_type: approval
+    data_fields:
+      approval_id: string
+      proposal_id: string
+      proposal_version: integer
+      expires_at: "ISO 8601 | null"
+
+  - type: run.awaiting_user
+    description: Run paused. Model requires clarification from the user.
+    producer: agent-api
+    resource_type: run
+    data_fields:
+      question: string
+
+  - type: run.escalated
+    description: Run escalated beyond agent authority. Requires human specialist.
+    producer: agent-api
+    resource_type: run
+    data_fields:
+      reason: string
+
+  - type: run.completed
+    description: Run reached terminal state successfully.
+    producer: agent-api
+    resource_type: run
+    data_fields:
+      summary: string
+
+  - type: run.failed
+    description: Run failed with an unrecoverable error.
+    producer: agent-api
+    resource_type: run
+    data_fields:
+      error_code: string
+      message: string
+
+  - type: run.cancelled
+    description: Run was cancelled by the client or system.
+    producer: agent-api
+    resource_type: run
+    data_fields:
+      reason: "string | null"
+      cancelled_by: string
+
+  # ── Approval events ───────────────────────
+
+  - type: approval.approved
+    description: Human approved the specified proposal version.
+    producer: action-service
+    resource_type: approval
+    data_fields:
+      approval_id: string
+      proposal_id: string
+      decided_proposal_version: integer
+      approver_id: string
+      resulting_command_id: "string | null"
+
+  - type: approval.rejected
+    description: Human rejected the proposal.
+    producer: action-service
+    resource_type: approval
+    data_fields:
+      approval_id: string
+      proposal_id: string
+      decided_proposal_version: integer
+      reason: string
+
+  - type: approval.revised
+    description: Proposal revised. New proposal version created. Approval returned to pending.
+    producer: action-service
+    resource_type: approval
+    data_fields:
+      approval_id: string
+      proposal_id: string
+      new_version: integer
+      revised_by: string
+
+  - type: approval.expired
+    description: Approval expired without a decision. Resource will be re-read and recalculated.
+    producer: action-service
+    resource_type: approval
+    data_fields:
+      approval_id: string
+      proposal_id: string
+      expired_at: string
+
+  # ── Command events ────────────────────────
+
+  - type: command.created
+    description: |
+      Command created after authorization.passed. This event indicates a
+      side effect is authorized and queued for dispatch. Command is only
+      created after authorization.passed — never before.
+    producer: action-service
+    resource_type: command
+    data_fields:
+      command_id: string
+      tool_name: string
+      idempotency_key: string
+      proposal_version: integer
+
+  - type: command.dispatched
+    description: Command worker sent the request to the provider.
+    producer: command-worker
+    resource_type: command
+    data_fields:
+      command_id: string
+      attempt_number: integer
+      worker_id: string
+
+  - type: command.succeeded
+    description: Provider confirmed the operation committed.
+    producer: command-worker
+    resource_type: command
+    data_fields:
+      command_id: string
+      provider_reference: string
+      attempt_number: integer
+
+  - type: command.failed
+    description: Provider rejected the operation. Will not retry automatically.
+    producer: command-worker
+    resource_type: command
+    data_fields:
+      command_id: string
+      rejection_reason: string
+      attempt_number: integer
+
+  - type: command.unknown
+    description: |
+      Provider outcome is uncertain (timeout, connection reset).
+      The runtime sets command.status = unknown. Do not retry before
+      reconciliation completes. Subscribe to reconciliation.completed
+      to know when it is safe to proceed.
+    producer: command-worker
+    resource_type: command
+    data_fields:
+      command_id: string
+      attempt_number: integer
+      error: string
+
+  - type: command.reconciliation_required
+    description: Manual reconciliation triggered for command with unknown outcome.
+    producer: command-worker
+    resource_type: command
+    data_fields:
+      command_id: string
+
+  # ── Reconciliation events ─────────────────
+
+  - type: reconciliation.completed
+    description: Unknown outcome resolved by querying the provider.
+    producer: command-worker
+    resource_type: command
+    data_fields:
+      command_id: string
+      resolution: "succeeded | failed | still_unknown"
+      provider_reference: "string | null"
+
+  # ── Handoff events ────────────────────────
+
+  - type: handoff.created
+    description: Agent-to-agent handoff initiated.
+    producer: agent-api
+    resource_type: handoff
+    data_fields:
+      handoff_id: string
+      from_agent: string
+      to_agent: string
+      handoff_type: "internal_handoff | user_visible_handoff | human_escalation"
+      user_visible: boolean
+
+  - type: handoff.completed
+    description: Handoff completed. Receiving agent is now active.
+    producer: agent-api
+    resource_type: handoff
+    data_fields:
+      handoff_id: string
+      to_agent: string

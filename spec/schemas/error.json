@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/error.json",
+  "title": "Error",
+  "description": "Standard error envelope. All 4xx and 5xx responses use this structure.",
+  "type": "object",
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message", "request_id"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "validation_error",
+            "not_found",
+            "unauthorized",
+            "forbidden",
+            "conflict",
+            "idempotency_conflict",
+            "stale_approval",
+            "approval_expired",
+            "invalid_state_transition",
+            "provider_error",
+            "unknown_outcome",
+            "rate_limit_exceeded",
+            "internal_error"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable description."
+        },
+        "request_id": {
+          "type": "string",
+          "description": "Trace ID. Use this when reporting issues."
+        },
+        "details": {
+          "type": "object",
+          "description": "Optional machine-readable context. Field names are code-specific.",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

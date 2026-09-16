@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/proposal.json",
+  "title": "Proposal",
+  "description": "A reviewable, structured description of the intended action. May have many versions. Owned by the Action Service.",
+  "type": "object",
+  "required": ["proposal_id", "tool_call_id", "run_id", "tenant_id", "current_version", "status", "created_at", "updated_at"],
+  "properties": {
+    "proposal_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tool_call_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "current_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Version number of the latest proposal_version record."
+    },
+    "approved_version": {
+      "type": ["integer", "null"],
+      "description": "Version that was approved. Set when an approval.approved decision is recorded."
+    },
+    "approval_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Associated approval record, if one exists."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["drafted", "pending_approval", "approved", "rejected", "expired", "cancelled"]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

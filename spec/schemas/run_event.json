@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/run_event.json",
+  "title": "RunEvent",
+  "description": "Append-only audit event. Written by multiple services. DB assigns sequence number within the run.",
+  "type": "object",
+  "required": ["event_id", "run_id", "tenant_id", "type", "sequence", "created_at"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string",
+      "description": "Event type string. See spec/events/catalog.yaml for all values."
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonic sequence number within this run. Assigned by the database."
+    },
+    "api_version": {
+      "type": "string",
+      "description": "API version at time of emission."
+    },
+    "resource": {
+      "type": ["object", "null"],
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string" },
+        "id": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "data": {
+      "type": ["object", "null"],
+      "description": "Event-specific payload. See catalog.yaml for field definitions per type."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

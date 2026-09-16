@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/tool_call.json",
+  "title": "ToolCall",
+  "description": "A model-proposed action. Owned by the Action Service. Read-only after creation.",
+  "type": "object",
+  "required": ["tool_call_id", "run_id", "tenant_id", "tool_name", "arguments", "status", "created_at"],
+  "properties": {
+    "tool_call_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "tool_name": {
+      "type": "string"
+    },
+    "arguments": {
+      "type": "object",
+      "description": "Raw arguments from the model. Unvalidated at this point."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "approved", "rejected", "expired", "cancelled"]
+    },
+    "proposal_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Set after prepare stage completes."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

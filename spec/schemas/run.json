@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/run.json",
+  "title": "Run",
+  "description": "An agent run. Created by the client. Tracks execution lifecycle.",
+  "type": "object",
+  "required": ["run_id", "tenant_id", "agent_id", "status", "created_at", "updated_at"],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Derived from the API key. Never supplied by the client."
+    },
+    "agent_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "approval_required", "awaiting_user", "escalated", "completed", "failed", "cancelled"]
+    },
+    "pending_approval": {
+      "oneOf": [
+        { "$ref": "approval_ref.json" },
+        { "type": "null" }
+      ],
+      "description": "Present when status is approval_required."
+    },
+    "summary": {
+      "type": ["string", "null"],
+      "description": "Terminal summary. Present when status is completed."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

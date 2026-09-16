@@ -1,0 +1,112 @@
+{
+  "description": "Primary workflow event sequence for a user-initiated governed action with HITL approval. This sequence is the shared reference across openapi.yaml, the database schema, the webhook catalog, the replay implementation, and the conformance tests. Any inconsistency between those artifacts against this sequence is a bug.",
+  "domain": "payroll",
+  "scenario": "User requests investigation of EMP-4412. Agent detects anomaly, prepares case, requires human approval, commits action.",
+  "sequence": [
+    {
+      "event": "run.created",
+      "producer": "agent-api",
+      "description": "Agent run created. Tenant derived from credential."
+    },
+    {
+      "event": "run.message_received",
+      "producer": "agent-api",
+      "description": "User message received and appended to run context."
+    },
+    {
+      "event": "run.tool_proposed",
+      "producer": "agent-api",
+      "description": "Model returned a tool call request. Recorded as a tool_call record before forwarding to Action Service."
+    },
+    {
+      "event": "proposal.drafted",
+      "producer": "action-service",
+      "description": "Action Service validated tool arguments, evaluated deterministic policy, created proposal and proposal_version 1."
+    },
+    {
+      "event": "policy.evaluated",
+      "producer": "action-service",
+      "description": "Deterministic policy check result recorded with policy_decision_id. approval_required: true for this action type."
+    },
+    {
+      "event": "run.approval_required",
+      "producer": "agent-api",
+      "description": "Run status set to awaiting_approval. Approval record created. Run paused."
+    },
+    {
+      "event": "approval.claimed",
+      "producer": "action-service",
+      "description": "Approver reserved the approval item. Prevents simultaneous review by two approvers."
+    },
+    {
+      "event": "approval.approved",
+      "producer": "action-service",
+      "description": "Human approved proposal_version N. Approval decision recorded."
+    },
+    {
+      "event": "authorization.rechecked",
+      "producer": "action-service",
+      "description": "Action Service re-evaluated authorization after approval. Checks resource version, policy, actor permissions, separation of duties."
+    },
+    {
+      "event": "authorization.passed",
+      "producer": "action-service",
+      "description": "Authorization confirmed. Command may now be created."
+    },
+    {
+      "event": "command.created",
+      "producer": "action-service",
+      "description": "Command record created. Outbox event written in the same Postgres transaction. Command references exact approved proposal_version."
+    },
+    {
+      "event": "command.dispatched",
+      "producer": "command-worker",
+      "description": "Worker claimed outbox lease and sent request to provider with idempotency key."
+    },
+    {
+      "event": "command.succeeded",
+      "producer": "command-worker",
+      "description": "Provider confirmed the operation. downstream_reference recorded."
+    },
+    {
+      "event": "run.resumed",
+      "producer": "agent-api",
+      "description": "Agent run resumed with tool result. Model called with command outcome."
+    },
+    {
+      "event": "run.completed",
+      "producer": "agent-api",
+      "description": "Run reached terminal state. Full audit record complete and queryable."
+    }
+  ],
+  "failure_branches": {
+    "unknown_outcome": [
+      "command.dispatched",
+      "command.unknown",
+      "reconciliation.triggered",
+      "reconciliation.completed",
+      "command.succeeded"
+    ],
+    "stale_approval": [
+      "approval.approved",
+      "authorization.rechecked",
+      "stale_approval_detected",
+      "proposal.drafted",
+      "run.approval_required"
+    ],
+    "approval_expired": [
+      "approval.expired",
+      "proposal.drafted",
+      "run.approval_required"
+    ],
+    "approval_revised": [
+      "approval.claimed",
+      "approval.revised",
+      "approval.claimed",
+      "approval.approved",
+      "authorization.rechecked",
+      "authorization.passed",
+      "command.created"
+    ]
+  }
+}

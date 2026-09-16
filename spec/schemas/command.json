@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/command.json",
+  "title": "Command",
+  "description": "An authorized side-effect instruction. Only created after authorization.passed. Owned by the Action Service.",
+  "type": "object",
+  "required": [
+    "command_id", "approval_id", "proposal_id", "proposal_version",
+    "run_id", "tenant_id", "tool_name", "idempotency_key",
+    "status", "created_at", "updated_at"
+  ],
+  "properties": {
+    "command_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "approval_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "proposal_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "proposal_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The exact approved proposal version. Immutable after creation."
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "tool_name": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "description": "UUID. Stable across retries. Supplied to the provider for deduplication."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["created", "dispatched", "succeeded", "failed", "unknown", "cancelled"]
+    },
+    "provider_reference": {
+      "type": ["string", "null"],
+      "description": "Provider transaction ID. Set when status is succeeded."
+    },
+    "rejection_reason": {
+      "type": ["string", "null"],
+      "description": "Set when status is failed."
+    },
+    "attempt_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

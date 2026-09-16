@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/approval.json",
+  "title": "Approval",
+  "description": "A human decision record associated with a proposal. Owned by the Action Service.",
+  "type": "object",
+  "required": [
+    "approval_id", "proposal_id", "run_id", "tenant_id",
+    "status", "current_proposal_version", "risk_level",
+    "requires_approval", "created_at", "updated_at"
+  ],
+  "properties": {
+    "approval_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "proposal_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "claimed", "approved", "rejected", "revised", "expired", "cancelled"]
+    },
+    "current_proposal_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The version the human reviewer is currently looking at."
+    },
+    "decided_proposal_version": {
+      "type": ["integer", "null"],
+      "description": "Set when a final decision (approved/rejected) is recorded."
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "requires_approval": {
+      "type": "boolean"
+    },
+    "claimed_by": {
+      "type": ["string", "null"],
+      "description": "User ID who claimed this approval. Prevents simultaneous review."
+    },
+    "claimed_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "approver_id": {
+      "type": ["string", "null"]
+    },
+    "approver_note": {
+      "type": ["string", "null"]
+    },
+    "decided_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "resulting_command_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Set after authorization.passed and command is created."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/schemas/proposal_version.json",
+  "title": "ProposalVersion",
+  "description": "One immutable snapshot of a proposal's content and policy evaluation. Append-only — never mutated after creation.",
+  "type": "object",
+  "required": [
+    "proposal_version_id", "proposal_id", "version", "tool_name",
+    "content", "risk_level", "requires_approval",
+    "evidence_citations", "resource_version", "policy_version",
+    "policy_outcome", "created_at"
+  ],
+  "properties": {
+    "proposal_version_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "proposal_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tool_name": {
+      "type": "string"
+    },
+    "content": {
+      "type": "object",
+      "description": "Structured, human-reviewable description of the proposed action."
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "requires_approval": {
+      "type": "boolean"
+    },
+    "evidence_citations": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "uncertainty_statement": {
+      "type": ["string", "null"],
+      "description": "Present when the outcome cannot be determined with confidence. Surfaced to the human reviewer."
+    },
+    "resource_version": {
+      "type": "integer",
+      "description": "Provider resource version at prepare time. Used for stale detection on approval."
+    },
+    "policy_version": {
+      "type": "string"
+    },
+    "policy_outcome": {
+      "type": "string",
+      "enum": ["approved", "requires_approval", "rejected"],
+      "description": "Output of the policy gate at prepare time."
+    },
+    "revised_by": {
+      "type": ["string", "null"],
+      "description": "User ID if this version was created by a human revision. Null if created by the agent."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

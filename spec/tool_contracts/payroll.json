@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/tool_contracts/payroll.json",
+  "title": "Payroll Tool Contracts",
+  "description": "Tool schemas for the payroll domain. The Action Service validates model arguments against these schemas before passing to prepare.",
+
+  "tools": {
+    "investigate_payroll_anomaly": {
+      "description": "Investigate a potential payroll anomaly for a specific employee. Reads employee record, payroll record, and associated evidence. Does not modify any data.",
+      "risk_level": "low",
+      "requires_approval": false,
+      "arguments": {
+        "type": "object",
+        "required": ["employee_id"],
+        "properties": {
+          "employee_id": {
+            "type": "string",
+            "description": "The employee identifier to investigate."
+          },
+          "period": {
+            "type": ["string", "null"],
+            "pattern": "^\\d{4}-\\d{2}$",
+            "description": "ISO 8601 year-month (e.g. 2026-09). Defaults to current period."
+          },
+          "anomaly_type": {
+            "type": ["string", "null"],
+            "enum": ["classification", "gross_pay", "deduction", "jurisdiction", null],
+            "description": "Focus the investigation on a specific anomaly type."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+
+    "prepare_classification_correction": {
+      "description": "Prepare a reviewable proposal to correct an employee classification. High risk — requires human approval before any change is committed.",
+      "risk_level": "high",
+      "requires_approval": true,
+      "arguments": {
+        "type": "object",
+        "required": ["employee_id", "correction_type", "evidence_ids"],
+        "properties": {
+          "employee_id": {
+            "type": "string"
+          },
+          "correction_type": {
+            "type": "string",
+            "enum": ["misclassification_contractor_to_employee", "misclassification_employee_to_contractor", "jurisdiction_correction"],
+            "description": "The type of classification correction being proposed."
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "IDs of evidence records that support this correction. At least one is required."
+          },
+          "notes": {
+            "type": ["string", "null"],
+            "maxLength": 1000,
+            "description": "Optional agent notes for the human reviewer. Not included in the proposal content sent to the provider."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+
+    "flag_for_legal_review": {
+      "description": "Flag an employee record for legal team review without committing any change. Medium risk — requires approval to confirm that the flag is warranted.",
+      "risk_level": "medium",
+      "requires_approval": true,
+      "arguments": {
+        "type": "object",
+        "required": ["employee_id", "reason", "evidence_ids"],
+        "properties": {
+          "employee_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["potential_misclassification", "jurisdiction_ambiguity", "conflicting_records", "other"],
+            "description": "The category of concern."
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
+          "urgency": {
+            "type": ["string", "null"],
+            "enum": ["standard", "urgent", null],
+            "default": "standard"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}
