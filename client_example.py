@@ -59,7 +59,7 @@ def poll_command(command_id: str, timeout: int = 60) -> dict:
 print("Step 1 — Creating run...")
 r = session.post(
     f"{BASE_URL}/v1/runs",
-    json={"agent_id": "payroll-detective"},
+    json={"agent_id": "payroll-agent-a"},
 )
 r.raise_for_status()
 run = r.json()

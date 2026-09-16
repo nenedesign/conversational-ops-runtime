@@ -193,6 +193,27 @@ class RunMessageResponse(BaseModel):
     status: str
     message: dict[str, Any] | None = None
     pending_approval: dict[str, Any] | None = None
+    handoff: dict[str, Any] | None = None
+
+
+class CreateHandoffRequest(BaseModel):
+    to_agent: str
+    handoff_type: str = "internal_handoff"
+    reason: str
+    context_package: dict[str, Any] | None = None
+
+
+class HandoffResponse(BaseModel):
+    handoff_id: str
+    run_id: str
+    target_run_id: str | None
+    from_agent: str
+    to_agent: str
+    handoff_type: str
+    reason: str | None
+    status: str
+    created_at: datetime
+    completed_at: datetime | None = None
 
 
 class RunEventResponse(BaseModel):

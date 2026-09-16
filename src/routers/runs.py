@@ -48,13 +48,24 @@ router = APIRouter(tags=["runs"])
 MAX_TOOL_ROUNDS = 5
 
 AGENT_SYSTEM_PROMPTS: dict[str, str] = {
-    "payroll-detective": (
-        "You are a payroll compliance detective working for a multinational company. "
+    "payroll-agent-a": (
+        "You are a payroll compliance agent working for a multinational company. "
         "Your role is to identify payroll anomalies and prepare correction proposals for human review. "
         "When asked to investigate an employee, first call investigate_payroll_anomaly to gather facts. "
         "If you detect a misclassification, call prepare_classification_correction to create a proposal. "
+        "If the investigation result includes a withholding_note indicating cross-border tax obligations, "
+        "use trigger_agent_handoff to transfer the case to border-agent-a — include all relevant facts "
+        "in structured_facts so the specialist has full context. "
         "Explain your findings and reasoning clearly. "
         "You do not make final decisions — you prepare evidence-backed cases for human review."
+    ),
+    "border-agent-a": (
+        "You are a cross-border payroll compliance specialist. "
+        "You receive cases handed off from the payroll compliance agent when they involve "
+        "multi-jurisdiction tax obligations, withholding requirements, or cross-border regulatory compliance. "
+        "You have been given structured context from the referring agent — review it carefully. "
+        "Provide jurisdiction-specific guidance, identify applicable regulations, and recommend "
+        "concrete next steps. Be precise about which legal framework applies and why."
     ),
 }
 
@@ -111,7 +122,7 @@ async def _execute_read_tool(tool_name: str, tool_input: dict, tenant_id: str) -
         employee_id = tool_input.get("employee_id", "")
         employee = await _provider.get_employee(employee_id, tenant_id)
         record = await _provider.get_payroll_record(employee_id, tenant_id)
-        return json.dumps({
+        result: dict = {
             "employee_id": employee_id,
             "name": employee.name,
             "status": employee.status,
@@ -127,8 +138,80 @@ async def _execute_read_tool(tool_name: str, tool_input: dict, tenant_id: str) -
                 "company for more than 6 consecutive months must be reclassified "
                 "as employees under Law 20744."
             ),
-        })
+        }
+        if employee.jurisdiction == "AR":
+            result["withholding_note"] = (
+                "Argentina RG 4003/2017: all employment reclassifications in AR "
+                "trigger mandatory withholding recalculation and a retroactive "
+                "declaration to AFIP. A cross-border compliance specialist must "
+                "review the withholding exposure before this reclassification "
+                "takes effect. Recommend handing off to border-agent-a."
+            )
+        return json.dumps(result)
     return f"Tool '{tool_name}' completed."
+
+
+async def _execute_handoff_records(
+    conn: asyncpg.Connection,
+    tenant_id: str,
+    run_id: str,
+    tool_input: dict,
+) -> dict:
+    """Create handoff + target run records. Does not close the source run — send_message handles that."""
+    from uuid import uuid4 as _uuid4
+    to_agent = tool_input.get("to_agent", "")
+    reason = tool_input.get("reason", "")
+    structured_facts = tool_input.get("structured_facts", {})
+    uncertainty = tool_input.get("uncertainty_statement", "")
+
+    handoff_id = str(_uuid4())
+    target_run_id = str(_uuid4())
+
+    target_system_prompt = AGENT_SYSTEM_PROMPTS.get(to_agent, DEFAULT_SYSTEM_PROMPT)
+
+    source_agent = await conn.fetchval("SELECT agent_id FROM runs WHERE run_id = $1", run_id)
+
+    context_parts = [f"Case received from {source_agent}.", f"Reason for handoff: {reason}"]
+    if structured_facts:
+        context_parts.append(f"\nStructured facts:\n{json.dumps(structured_facts, indent=2)}")
+    if uncertainty:
+        context_parts.append(f"\nUncertainty: {uncertainty}")
+    context_parts.append("\nPlease review the above and provide your analysis.")
+
+    context_package = {"structured_facts": structured_facts, "uncertainty_statement": uncertainty}
+
+    async with conn.transaction():
+        await conn.execute(
+            """
+            INSERT INTO runs (run_id, tenant_id, agent_id, status, state_version, metadata)
+            VALUES ($1, $2, $3, 'created', 0, $4)
+            """,
+            target_run_id, tenant_id, to_agent,
+            json.dumps({
+                "conversation_history": [{"role": "user", "content": "\n".join(context_parts)}],
+                "system_prompt": target_system_prompt,
+                "handoff_id": handoff_id,
+                "source_run_id": run_id,
+            }),
+        )
+        await conn.execute(
+            """
+            INSERT INTO handoffs
+                (handoff_id, run_id, target_run_id, tenant_id, from_agent, to_agent,
+                 handoff_type, reason, context_package, status)
+            VALUES ($1, $2, $3, $4, $5, $6, 'internal_handoff', $7, $8, 'active')
+            """,
+            handoff_id, run_id, target_run_id, tenant_id,
+            source_agent, to_agent, reason, json.dumps(context_package),
+        )
+        await write_audit_event(
+            conn, tenant_id=tenant_id, run_id=run_id,
+            event_type="run.handoff_initiated", producer="agent-api",
+            causation_id=handoff_id, correlation_id=run_id,
+            data={"handoff_id": handoff_id, "to_agent": to_agent, "target_run_id": target_run_id},
+        )
+
+    return {"handoff_id": handoff_id, "target_run_id": target_run_id, "to_agent": to_agent}
 
 
 async def _create_proposal_records(
@@ -253,11 +336,27 @@ async def _run_turn(
         tool_blocks = [b for b in response.content if b.type == "tool_use"]
         tool_results: list[dict] = []
         pending_approval: dict | None = None
+        pending_handoff: dict | None = None
 
         for block in tool_blocks:
             contract = _contracts.get(block.name, {})
 
-            if not contract.get("requires_approval", True):
+            if contract.get("is_handoff"):
+                # Structural tool: create handoff + target run, close source run after ack
+                result = await _execute_handoff_records(conn, tenant_id, run_id, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": (
+                        f"Handoff to {result['to_agent']} initiated. "
+                        f"Target run ID: {result['target_run_id']}. "
+                        "Please summarise what was handed off and what the user should do next."
+                    ),
+                })
+                if pending_handoff is None:
+                    pending_handoff = result
+
+            elif not contract.get("requires_approval", True):
                 # Read-only: execute now
                 result_text = await _execute_read_tool(block.name, block.input, tenant_id)
                 tool_results.append({
@@ -283,7 +382,6 @@ async def _run_turn(
                         "The run will pause until a human approves or rejects this proposal."
                     ),
                 })
-                # Track first pending approval (Phase 3 supports one at a time)
                 if pending_approval is None:
                     pending_approval = {
                         "approval_id": result["approval_id"],
@@ -296,11 +394,24 @@ async def _run_turn(
             {"role": "user",      "content": tool_results},
         ]
 
+        if pending_handoff:
+            # Let Claude acknowledge the handoff, then close the source run
+            ack_response = await _call_claude(system_prompt, current_messages, api_key)
+            ack_text = _extract_text(ack_response.content)
+            final_history = current_messages + [{"role": "assistant", "content": ack_text}]
+            return {
+                "outcome": "handed_off",
+                "reply": ack_text,
+                "handoff_id": pending_handoff["handoff_id"],
+                "target_run_id": pending_handoff["target_run_id"],
+                "to_agent": pending_handoff["to_agent"],
+                "history": final_history,
+            }
+
         if pending_approval:
             # Let Claude acknowledge the approval requirement, then pause
             ack_response = await _call_claude(system_prompt, current_messages, api_key)
             ack_text = _extract_text(ack_response.content)
-            # Save history including Claude's acknowledgment
             final_history = current_messages + [{"role": "assistant", "content": ack_text}]
             return {
                 "outcome": "awaiting_approval",
@@ -461,6 +572,17 @@ async def send_message(
             await conn.execute("UPDATE runs SET status = 'completed', metadata = $1, completed_at = NOW(), updated_at = NOW() WHERE run_id = $2", json.dumps(new_meta), run_id)
             await write_audit_event(conn, tenant_id=tenant_id, run_id=run_id, event_type="run.completed", producer="agent-api", causation_id=run_id, correlation_id=run_id, data={"reason": "end_turn"})
             return RunMessageResponse(run_id=run_id, status="completed", message={"role": "assistant", "content": result["reply"]})
+
+        elif result["outcome"] == "handed_off":
+            new_meta = {**meta, "conversation_history": result["history"], "pending_tool": None}
+            await conn.execute("UPDATE runs SET status = 'completed', metadata = $1, completed_at = NOW(), updated_at = NOW() WHERE run_id = $2", json.dumps(new_meta), run_id)
+            await write_audit_event(conn, tenant_id=tenant_id, run_id=run_id, event_type="run.completed", producer="agent-api", causation_id=run_id, correlation_id=run_id, data={"reason": "handoff", "handoff_id": result["handoff_id"], "target_run_id": result["target_run_id"]})
+            return RunMessageResponse(
+                run_id=run_id,
+                status="completed",
+                message={"role": "assistant", "content": result["reply"]},
+                handoff={"handoff_id": result["handoff_id"], "target_run_id": result["target_run_id"], "to_agent": result["to_agent"]},
+            )
 
         elif result["outcome"] == "awaiting_approval":
             new_meta = {

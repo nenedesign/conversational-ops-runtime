@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12",
+  "$id": "https://runtime.example/tool_contracts/handoff.json",
+  "title": "Handoff Tool Contracts",
+  "description": "Structural tools for transferring a case to a specialist agent. These tools are not approval-gated — the agent's decision to hand off is itself the governed action.",
+
+  "tools": {
+    "trigger_agent_handoff": {
+      "description": "Transfer the current case to a specialist agent. Use when the case requires expertise outside your domain. The structured facts you provide are the only context the receiving agent will have — be thorough and specific.",
+      "risk_level": "low",
+      "requires_approval": false,
+      "is_handoff": true,
+      "arguments": {
+        "type": "object",
+        "required": ["to_agent", "reason"],
+        "properties": {
+          "to_agent": {
+            "type": "string",
+            "enum": ["border-agent-a"],
+            "description": "The specialist agent to hand off to."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this case requires the specialist agent. Shown to the user."
+          },
+          "structured_facts": {
+            "type": "object",
+            "description": "Key facts gathered so far — employee data, findings, anomalies, relevant figures.",
+            "additionalProperties": true
+          },
+          "uncertainty_statement": {
+            "type": "string",
+            "description": "What is still unknown or unresolved about the case."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}
