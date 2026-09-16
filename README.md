@@ -257,7 +257,19 @@ The following were verified end-to-end against a live Postgres instance using `S
 - `unknown` outcome — code-complete: worker sets `command.status = 'unknown'`, creates `reconciliation_tasks` record, writes `command.unknown` audit event; `SimulatedPayrollProvider` triggers this path when instantiated with `inject_timeout=True`
 - Shared provider singleton (`src/provider.py`) — all routers and the worker share one `SimulatedPayrollProvider` instance so in-memory idempotency key tracking is consistent across the full request lifecycle
 
-**Phase 3 (next):** Managed runs — `POST /v1/runs`, `POST /v1/runs/{id}/messages`, model orchestration with Claude Sonnet 4.6, full conversation lifecycle tied to the governed action loop.
+**Phase 3: complete — tested 2026-09-16.**
+
+The following were verified end-to-end against a live Postgres instance using `SimulatedPayrollProvider` and Claude Sonnet 4.6:
+
+- `POST /v1/runs` — run created with `status: created`; system prompt selected by `agent_id` (`payroll-detective`)
+- `POST /v1/runs/{id}/messages` — agent called `investigate_payroll_anomaly` (read-only, no approval), then `prepare_classification_correction` (approval required); run paused at `status: awaiting_approval` with `pending_approval` block in the response
+- Approval, command creation, and worker dispatch followed the same path as Phase 2 — 9 audit events through `command.succeeded` with `downstream_reference: payroll-tx-{key}`
+- `POST /v1/runs/{id}/messages` (empty body = resume signal) — runtime detected command succeeded, fed provider reference to Claude, returned `status: completed` with a final structured summary
+- `GET /v1/runs/{id}/events` — 11-event audit chain: `tool_call.received` → `proposal.created` → `policy.evaluated` → `approval.required` → `authorization.rechecked` → `authorization.passed` → `command.created` → `command.dispatched` → `command.succeeded` → `run.completed`
+
+New endpoints: `POST /v1/runs`, `GET /v1/runs/{id}`, `POST /v1/runs/{id}/messages`, `GET /v1/runs/{id}/events`, `POST /v1/runs/{id}/cancel`
+
+Requires `ANTHROPIC_API_KEY` in `.env`. Rotate after each test session.
 
 ---
 

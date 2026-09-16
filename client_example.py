@@ -1,23 +1,18 @@
 """
-Conversational Operations Runtime — Minimal Client Example
+Conversational Operations Runtime — End-to-End Client Example
 
-Demonstrates the primary governed-action loop from the perspective of an
-external developer connecting their agent to the runtime. No SDK — raw
-HTTP with the requests library.
+Demonstrates the full managed run loop from the perspective of an external
+client: create a run, send a message, let the agent investigate and propose
+a correction, handle human approval, wait for the command worker to dispatch,
+resume the run, and retrieve the audit trail.
+
+No SDK — raw HTTP with the requests library.
 
 Prerequisites:
   pip install requests
 
 Usage:
-  API_KEY=your-api-key python3 client_example.py
-
-This example:
-  1. Creates a run
-  2. Sends a message triggering the payroll detective agent
-  3. Polls until the run reaches approval_required
-  4. Approves the proposal
-  5. Polls until the run completes
-  6. Retrieves the audit event log
+  API_KEY=dev-api-key-001 python3 client_example.py
 """
 
 from __future__ import annotations
@@ -41,33 +36,33 @@ session.headers.update({
 })
 
 
-def idempotency_key(prefix: str) -> str:
+def ikey(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4()}"
 
 
-def poll_run(run_id: str, until_status: set[str], timeout: int = 60) -> dict:
+def poll_command(command_id: str, timeout: int = 60) -> dict:
+    """Poll GET /v1/commands/{id} until the command reaches a terminal state."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        resp = session.get(f"{BASE_URL}/v1/runs/{run_id}")
-        resp.raise_for_status()
-        run = resp.json()
-        if run["status"] in until_status:
-            return run
-        time.sleep(1)
-    raise TimeoutError(f"Run {run_id} did not reach {until_status} within {timeout}s")
+        r = session.get(f"{BASE_URL}/v1/commands/{command_id}")
+        r.raise_for_status()
+        cmd = r.json()
+        if cmd["status"] in ("succeeded", "failed", "unknown"):
+            return cmd
+        time.sleep(2)
+    raise TimeoutError(f"Command {command_id} did not reach terminal state within {timeout}s")
 
 
 # ──────────────────────────────────────────────
 # Step 1: Create a run
 # ──────────────────────────────────────────────
-print("→ Creating run...")
-resp = session.post(
+print("Step 1 — Creating run...")
+r = session.post(
     f"{BASE_URL}/v1/runs",
     json={"agent_id": "payroll-detective"},
-    headers={"Idempotency-Key": idempotency_key("run")},
 )
-resp.raise_for_status()
-run = resp.json()
+r.raise_for_status()
+run = r.json()
 run_id = run["run_id"]
 print(f"  run_id: {run_id}")
 print(f"  status: {run['status']}")
@@ -76,107 +71,128 @@ print(f"  status: {run['status']}")
 # ──────────────────────────────────────────────
 # Step 2: Send a message
 # ──────────────────────────────────────────────
-print("\n→ Sending message...")
-msg_key = idempotency_key("msg")
-resp = session.post(
+# The agent investigates EMP-4412 using a read-only tool (no approval needed),
+# detects a misclassification, then calls prepare_classification_correction
+# (approval required). The run pauses and returns status: awaiting_approval.
+# The approval_id is included in the message response — no polling required.
+# ──────────────────────────────────────────────
+print("\nStep 2 — Sending message...")
+r = session.post(
     f"{BASE_URL}/v1/runs/{run_id}/messages",
-    json={"content": "Investigate the payroll anomaly for EMP-4412."},
-    headers={"Idempotency-Key": msg_key},
+    json={"content": "Investigate the payroll record for employee EMP-4412 and prepare any necessary corrections."},
 )
-resp.raise_for_status()
-msg_response = resp.json()
-print(f"  status: {msg_response['status']}")  # 202 Accepted → awaiting_approval
+r.raise_for_status()
+msg = r.json()
+print(f"  status: {msg['status']}")
+if msg.get("message"):
+    print(f"  reply:  {msg['message']['content'][:200]}...")
 
-
-# ──────────────────────────────────────────────
-# Step 3: Poll until approval is required
-# ──────────────────────────────────────────────
-print("\n→ Waiting for approval_required...")
-run = poll_run(run_id, until_status={"approval_required", "completed", "failed"})
-print(f"  status: {run['status']}")
-
-if run["status"] != "approval_required":
-    print(f"  Run ended with status: {run['status']} — no approval needed.")
-    exit(0)
-
-
-# ──────────────────────────────────────────────
-# Step 4: Retrieve the pending approval
-# ──────────────────────────────────────────────
-print("\n→ Retrieving pending approval...")
-approval_id = run["pending_approval"]["approval_id"]
-resp = session.get(f"{BASE_URL}/v1/approvals/{approval_id}")
-resp.raise_for_status()
-approval = resp.json()
-proposal_version = approval["current_proposal_version"]
+assert msg["status"] == "awaiting_approval", f"Expected awaiting_approval, got {msg['status']}"
+approval_id = msg["pending_approval"]["approval_id"]
+risk_level   = msg["pending_approval"]["risk_level"]
 print(f"  approval_id: {approval_id}")
-print(f"  proposal_version: {proposal_version}")
-print(f"  risk_level: {approval['risk_level']}")
+print(f"  risk_level:  {risk_level}")
 
 
 # ──────────────────────────────────────────────
-# Step 5: Claim the approval
+# Step 3: Retrieve the approval
 # ──────────────────────────────────────────────
-print("\n→ Claiming approval...")
-resp = session.post(
+# The approval record includes the current proposal version — required when
+# submitting the approve decision to detect stale approvals.
+# ──────────────────────────────────────────────
+print("\nStep 3 — Retrieving approval...")
+r = session.get(f"{BASE_URL}/v1/approvals/{approval_id}")
+r.raise_for_status()
+approval = r.json()
+proposal_version = approval["current_proposal_version"]
+print(f"  risk_level:        {approval['risk_level']}")
+print(f"  proposal_version:  {proposal_version}")
+print(f"  requires_approval: {approval['requires_approval']}")
+
+
+# ──────────────────────────────────────────────
+# Step 4: Claim the approval
+# ──────────────────────────────────────────────
+# Claiming prevents two reviewers from approving simultaneously.
+# Optional in low-volume environments; required for multi-reviewer queues.
+# ──────────────────────────────────────────────
+print("\nStep 4 — Claiming approval...")
+r = session.post(
     f"{BASE_URL}/v1/approvals/{approval_id}/claim",
     json={},
-    headers={"Idempotency-Key": idempotency_key(f"claim-{approval_id}")},
+    headers={"Idempotency-Key": ikey(f"claim-{approval_id}")},
 )
-resp.raise_for_status()
-print(f"  claimed: {resp.json().get('claimed_by')}")
+r.raise_for_status()
+print(f"  claimed_by: {r.json().get('claimed_by')}")
 
 
 # ──────────────────────────────────────────────
-# Step 6: Approve
+# Step 5: Human approves the proposal
 # ──────────────────────────────────────────────
-print("\n→ Approving proposal...")
-resp = session.post(
+# proposal_version must match current_proposal_version from Step 3.
+# A version mismatch means the proposal was revised while you were reviewing —
+# the runtime rejects stale approvals and forces a re-review.
+# ──────────────────────────────────────────────
+print("\nStep 5 — Approving proposal...")
+r = session.post(
     f"{BASE_URL}/v1/approvals/{approval_id}/approve",
     json={
         "proposal_version": proposal_version,
-        "approver_note": "Reviewed cited records.",
+        "approver_note": "Reviewed cited records. Reclassification justified.",
     },
-    headers={"Idempotency-Key": idempotency_key(f"approve-{approval_id}-v{proposal_version}")},
+    headers={"Idempotency-Key": ikey(f"approve-{approval_id}-v{proposal_version}")},
 )
-resp.raise_for_status()
-print(f"  result: {resp.json().get('status')}")
+r.raise_for_status()
+approve_result = r.json()
+command_id = approve_result["command_id"]
+print(f"  approval status: {approve_result['status']}")
+print(f"  command_id:      {command_id}")
 
 
 # ──────────────────────────────────────────────
-# Step 7: Poll until completed
+# Step 6: Wait for the command worker to dispatch
 # ──────────────────────────────────────────────
-print("\n→ Waiting for run to complete...")
-run = poll_run(run_id, until_status={"completed", "failed", "cancelled"}, timeout=120)
-print(f"  final status: {run['status']}")
-if run["status"] == "completed":
-    print(f"  summary: {run.get('summary', '(none)')}")
+# After approval, the command worker polls the outbox (every 2 seconds,
+# FOR UPDATE SKIP LOCKED) and dispatches the commit to the provider adapter.
+# Dispatch typically completes within 250ms–2s of being claimed.
+# ──────────────────────────────────────────────
+print("\nStep 6 — Waiting for command worker to dispatch...")
+cmd = poll_command(command_id)
+print(f"  command status:       {cmd['status']}")
+print(f"  downstream_reference: {cmd['downstream_reference']}")
+
+
+# ──────────────────────────────────────────────
+# Step 7: Resume the run
+# ──────────────────────────────────────────────
+# POST .../messages with no content (or an empty body) signals a resume.
+# The runtime detects that the pending approval's command succeeded,
+# feeds the provider reference back to Claude, and returns the final summary.
+# ──────────────────────────────────────────────
+print("\nStep 7 — Resuming run...")
+r = session.post(
+    f"{BASE_URL}/v1/runs/{run_id}/messages",
+    json={},
+)
+r.raise_for_status()
+final = r.json()
+print(f"  status: {final['status']}")
+if final.get("message"):
+    print(f"  reply:  {final['message']['content'][:300]}...")
 
 
 # ──────────────────────────────────────────────
 # Step 8: Retrieve the full audit event log
 # ──────────────────────────────────────────────
-print("\n→ Fetching audit event log...")
-resp = session.get(f"{BASE_URL}/v1/runs/{run_id}/events", params={"limit": 50})
-resp.raise_for_status()
-events = resp.json()["events"]
-print(f"  {len(events)} events recorded:")
-for event in events:
-    print(f"    [{event['sequence']:02d}] {event['type']}")
-
-
+# Returns a flat list of RunEventResponse objects ordered by occurred_at.
+# A full governed run produces 11 events: tool_call.received through run.completed.
 # ──────────────────────────────────────────────
-# Step 9: Replay in inspect mode (no side effects)
-# ──────────────────────────────────────────────
-print("\n→ Replaying in inspect mode...")
-resp = session.post(
-    f"{BASE_URL}/v1/runs/{run_id}/replay",
-    json={"mode": "inspect"},
-    headers={"Idempotency-Key": idempotency_key(f"replay-{run_id}-inspect")},
-)
-resp.raise_for_status()
-replay = resp.json()
-print(f"  replayed_run_id: {replay['run_id']}")
-print(f"  mode: {replay['mode']}")
+print("\nStep 8 — Fetching audit event log...")
+r = session.get(f"{BASE_URL}/v1/runs/{run_id}/events")
+r.raise_for_status()
+events = r.json()  # list[RunEventResponse]
+print(f"  {len(events)} events:")
+for i, event in enumerate(events, 1):
+    print(f"    [{i:02d}] {event['type']:<40}  producer={event['producer']}")
 
 print("\nDone.")
