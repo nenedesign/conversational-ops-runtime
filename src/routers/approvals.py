@@ -9,18 +9,9 @@ from ..auth import require_auth
 from ..db import get_pool
 from ..models import ApprovalResponse, ApproveRequest, ApproveResponse, RejectRequest
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from adapters.adapter_interface import (
-    CommitCorrectionRequest,
-    PrepareCorrectionRequest,
-    SimulatedPayrollProvider,
-)
+from ..provider import PrepareCorrectionRequest, provider as _provider
 
 router = APIRouter(tags=["approvals"])
-
-_provider = SimulatedPayrollProvider()
 
 
 @router.get("/approvals/{approval_id}", response_model=ApprovalResponse)
@@ -282,6 +273,17 @@ async def approve(
             await conn.execute(
                 "UPDATE tool_calls SET status = 'command_created', updated_at = NOW() WHERE tool_call_id = $1",
                 tool_call_row["tool_call_id"],
+            )
+
+            # Outbox event written in the same transaction as the command record.
+            # The command worker picks this up and dispatches via commit_correction.
+            outbox_event_id = str(uuid4())
+            await conn.execute(
+                """
+                INSERT INTO outbox (event_id, command_id, status, attempt_number)
+                VALUES ($1, $2, 'pending', 0)
+                """,
+                outbox_event_id, command_id,
             )
 
             await write_audit_event(

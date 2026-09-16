@@ -155,6 +155,18 @@ class ApproveResponse(BaseModel):
     message: str
 
 
+class CommandAttemptResponse(BaseModel):
+    attempt_id: str
+    command_id: str
+    attempt_number: int
+    worker_id: str | None
+    status: str
+    provider_reference: str | None
+    error: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
 class ErrorBody(BaseModel):
     code: str
     message: str

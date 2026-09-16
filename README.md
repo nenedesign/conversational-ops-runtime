@@ -245,7 +245,19 @@ Source: [`src/`](src/). Runs with `make db-up && make dev`. Requires Docker and 
 
 **Competitive testing: pending.** Hands-on testing of AxonFlow, JamJet, and Tandem against the design goals listed above has not yet been completed. The Design goals section reflects intent. Findings will be documented in `docs/competitor-notes/` when testing is done.
 
-**Phase 2 (next):** Command worker — dispatch authorized commands to the provider via `commit_correction`, handle `unknown` outcome as a durable state, trigger reconciliation, close the loop with `command.completed`.
+**Phase 2: complete — tested 2026-09-16.**
+
+The following were verified end-to-end against a live Postgres instance using `SimulatedPayrollProvider`:
+
+- Command worker (`src/worker.py`) — background asyncio task polls the outbox every 2 seconds using `FOR UPDATE SKIP LOCKED`, claims events with a 30-second lease, calls `commit_correction`, and records the outcome atomically
+- `committed` outcome — `command.status` updated to `succeeded`, `downstream_reference` set to the provider transaction ID (`payroll-tx-{key}`)
+- `GET /v1/commands/{id}/attempts` — attempt record created with `worker_id`, `provider_reference`, and `completed_at` timestamps
+- Full audit chain across both services verified: 9 events per governed loop — `tool_call.received`, `proposal.created`, `policy.evaluated`, `approval.required`, `authorization.rechecked`, `authorization.passed`, `command.created` (action-service), `command.dispatched`, `command.succeeded` (command-worker)
+- `POST /v1/commands/{id}/reconcile` — reconciliation endpoint live; returns `409 not_reconcilable` for commands not in `unknown` state; calls `reconcile_correction`, writes `command.reconciled` audit event, updates `reconciliation_tasks`
+- `unknown` outcome — code-complete: worker sets `command.status = 'unknown'`, creates `reconciliation_tasks` record, writes `command.unknown` audit event; `SimulatedPayrollProvider` triggers this path when instantiated with `inject_timeout=True`
+- Shared provider singleton (`src/provider.py`) — all routers and the worker share one `SimulatedPayrollProvider` instance so in-memory idempotency key tracking is consistent across the full request lifecycle
+
+**Phase 3 (next):** Managed runs — `POST /v1/runs`, `POST /v1/runs/{id}/messages`, model orchestration with Claude Sonnet 4.6, full conversation lifecycle tied to the governed action loop.
 
 ---
 

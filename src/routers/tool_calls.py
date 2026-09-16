@@ -19,18 +19,9 @@ from ..models import (
 from ..policy import evaluate_policy
 from ..tool_contracts import validate_arguments
 
-# SimulatedPayrollProvider lives at adapters/adapter_interface.py (repo root)
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from adapters.adapter_interface import (
-    PrepareCorrectionRequest,
-    SimulatedPayrollProvider,
-)
+from ..provider import PrepareCorrectionRequest, provider as _provider
 
 router = APIRouter(tags=["tool-calls"])
-
-_provider = SimulatedPayrollProvider()
 
 
 def _request_hash(method: str, path: str, tenant_id: str, body: dict) -> str:

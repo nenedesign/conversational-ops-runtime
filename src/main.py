@@ -1,19 +1,27 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .config import settings
-from .db import close_pool, init_pool
+from .db import close_pool, get_pool, init_pool
 from .routers import approvals, commands, proposals, tool_calls
 from .tool_contracts import load_contracts
+from .worker import dispatch_loop
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_contracts()
     await init_pool()
+    worker_task = asyncio.create_task(dispatch_loop(get_pool()))
     yield
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
     await close_pool()
 
 
