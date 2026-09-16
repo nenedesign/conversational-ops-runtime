@@ -1,0 +1,21 @@
+[project]
+name = "cor"
+version = "0.1.0-phase1"
+requires-python = ">=3.12"
+description = "Conversational Operations Runtime — Phase 1 reference implementation"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "asyncpg>=0.29.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "jsonschema>=4.23.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "adapters*"]

@@ -116,17 +116,18 @@ CREATE TABLE run_event_sequences (
 -- Records the model's tool request before forwarding to the Action Service
 CREATE TABLE tool_calls (
     tool_call_id    TEXT        PRIMARY KEY,
-    run_id          TEXT        NOT NULL REFERENCES runs(run_id),
+    run_id          TEXT        REFERENCES runs(run_id),  -- null when submitted via action boundary without a managed run
     tenant_id       TEXT        NOT NULL,
     tool_name       TEXT        NOT NULL,
     arguments       JSONB       NOT NULL DEFAULT '{}',
     status          TEXT        NOT NULL DEFAULT 'pending'
                                 CHECK (status IN (
-                                    'pending', 'completed', 'rejected', 'proposal_created'
+                                    'pending', 'completed', 'rejected', 'proposal_created', 'command_created'
                                 )),
     result          JSONB,
     proposal_id     TEXT,       -- FK added after proposals table created
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at    TIMESTAMPTZ
 );
 
@@ -134,7 +135,7 @@ CREATE INDEX idx_tool_calls_run ON tool_calls(run_id);
 
 CREATE TABLE proposals (
     proposal_id         TEXT        PRIMARY KEY,
-    run_id              TEXT        NOT NULL REFERENCES runs(run_id),
+    run_id              TEXT        REFERENCES runs(run_id),  -- null when submitted via action boundary
     tenant_id           TEXT        NOT NULL,
     tool_call_id        TEXT        NOT NULL REFERENCES tool_calls(tool_call_id),
     status              TEXT        NOT NULL DEFAULT 'drafted'
@@ -157,11 +158,14 @@ CREATE INDEX idx_proposals_status     ON proposals(status);
 CREATE TABLE proposal_versions (
     version_id              TEXT        PRIMARY KEY,
     proposal_id             TEXT        NOT NULL REFERENCES proposals(proposal_id),
-    run_id                  TEXT        NOT NULL,
+    run_id                  TEXT,       -- null when submitted via action boundary
     tenant_id               TEXT        NOT NULL,
     version                 INTEGER     NOT NULL,
     content                 JSONB       NOT NULL,       -- domain-specific proposal content
     evidence_ids            TEXT[]      NOT NULL DEFAULT '{}',
+    risk_level              TEXT        NOT NULL DEFAULT 'high'
+                                        CHECK (risk_level IN ('low', 'medium', 'high')),
+    resource_version        INTEGER,    -- provider resource version at prepare time; used for stale detection
     policy_version          TEXT,
     uncertainty_statement   TEXT,
     created_by              TEXT        NOT NULL,       -- actor_id
@@ -181,9 +185,12 @@ CREATE INDEX idx_proposal_versions_proposal ON proposal_versions(proposal_id, ve
 CREATE TABLE approvals (
     approval_id                 TEXT        PRIMARY KEY,
     proposal_id                 TEXT        NOT NULL REFERENCES proposals(proposal_id),
-    run_id                      TEXT        NOT NULL,
+    run_id                      TEXT,       -- null when submitted via action boundary
     tenant_id                   TEXT        NOT NULL,
     current_proposal_version    INTEGER     NOT NULL DEFAULT 1,
+    risk_level                  TEXT        NOT NULL DEFAULT 'high'
+                                            CHECK (risk_level IN ('low', 'medium', 'high')),
+    requires_approval           BOOLEAN     NOT NULL DEFAULT TRUE,
     status                      TEXT        NOT NULL DEFAULT 'pending'
                                             CHECK (status IN (
                                                 'pending', 'claimed', 'revised',
@@ -212,7 +219,7 @@ CREATE INDEX idx_approvals_assigned   ON approvals(assigned_to_id) WHERE status 
 -- A command represents an authorized, dispatchable side effect.
 CREATE TABLE commands (
     command_id              TEXT        PRIMARY KEY,
-    run_id                  TEXT        NOT NULL REFERENCES runs(run_id),
+    run_id                  TEXT        REFERENCES runs(run_id),  -- null when submitted via action boundary
     tenant_id               TEXT        NOT NULL,
     tool_call_id            TEXT        REFERENCES tool_calls(tool_call_id),
     proposal_id             TEXT        REFERENCES proposals(proposal_id),
@@ -494,5 +501,6 @@ CREATE TABLE idempotency_keys (
 );
 
 CREATE INDEX idx_idempotency_expires ON idempotency_keys(expires_at);
+CREATE INDEX idx_idempotency_lookup  ON idempotency_keys(idempotency_key, tenant_id);
 
 COMMIT;

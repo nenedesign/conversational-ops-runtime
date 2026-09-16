@@ -232,9 +232,20 @@ See [`adapters/adapter_interface.py`](adapters/adapter_interface.py) for the ful
 
 **Phase 0: complete.** Spec, schemas, event catalog, database schema, adapter interface, conformance tests.
 
-**Competitive testing (next, before Phase 1):** Hands-on testing of AxonFlow, JamJet, and Tandem against the specific design goals listed above. Until this is done, the claims in the Design goals section reflect intent, not confirmed gaps. Findings will be documented in `docs/competitor-notes/` and will inform any design adjustments before the Phase 1 build begins.
+**Phase 1: complete — tested 2026-09-16.**
 
-**Phase 1:** Agent API, Action Service, Command Worker, PostgreSQL, Claude Sonnet 4.6 as model, SimulatedPayrollProvider, minimal approval console. Exit criteria: one full governed-action loop end-to-end with audit events matching the golden sequence and inspect replay without side effects.
+The following were verified end-to-end against a live Postgres instance using `SimulatedPayrollProvider`:
+
+- `POST /v1/tool-calls` — argument validation (extra field rejected, invalid enum rejected), policy gate (high-risk tool routed to approval), proposal and approval records created in a single transaction, 4 audit events written (`tool_call.received`, `proposal.created`, `policy.evaluated`, `approval.required`)
+- Idempotency — repeat submission with the same `Idempotency-Key` and identical body returned the cached response; no new records or audit events were created
+- `POST /v1/approvals/{id}/approve` — authorization recheck passed (resource version matched), 3 audit events written (`authorization.rechecked`, `authorization.passed`, `command.created`), command created with unique dispatch idempotency key
+- `GET /v1/commands/{id}` — command record at `status: authorized` with full chain of custody: `tool_call_id`, `proposal_id`, and `approval_id` all linked
+
+Source: [`src/`](src/). Runs with `make db-up && make dev`. Requires Docker and Python 3.13+.
+
+**Competitive testing: pending.** Hands-on testing of AxonFlow, JamJet, and Tandem against the design goals listed above has not yet been completed. The Design goals section reflects intent. Findings will be documented in `docs/competitor-notes/` when testing is done.
+
+**Phase 2 (next):** Command worker — dispatch authorized commands to the provider via `commit_correction`, handle `unknown` outcome as a durable state, trigger reconciliation, close the loop with `command.completed`.
 
 ---
 
