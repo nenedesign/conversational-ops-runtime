@@ -1,124 +1,179 @@
 # Conversational Operations Runtime
 
-A self-hostable, API-first control plane for governed AI agent execution.
-
-The model proposes. The runtime decides.
+A typed business-action protocol for AI agents. Turns model tool requests into policy-checked, approval-gated, idempotent, verifiable operational effects — with explicit unknown-outcome handling and provider reconciliation.
 
 ---
 
 ## The problem
 
-AI agents that take actions in business systems (payroll, booking, HR, ERP) need a governance layer between the model and the provider. Without it, the model writes directly to production data, approvals are bolted on as ad-hoc logic, and audit trails are afterthoughts.
+AI agents that modify business systems (payroll, booking, HR, ERP) need a layer between the model and the provider that handles: argument validation, policy evaluation, human approval, idempotent commit, unknown outcomes, and audit. Most teams build this for every integration point, duplicated and inconsistent.
 
-Most teams build this governance layer from scratch, inside the agent, at each integration point. The logic is duplicated, the audit trail is incomplete, and the human approval flow is specific to one workflow.
-
-This runtime is the governance layer, built once, separate from the model.
+This runtime is that layer, built once, as a protocol, separate from the model.
 
 ---
 
-## Design
+## Two layers
 
 ```
-Client / Agent                Runtime                      Provider
-─────────────────    ─────────────────────────────    ─────────────────
-                     ┌───────────────────────────┐
-model tool call  →   │  argument validation       │
-                     │  policy gate               │
-                     │  proposal creation         │
-                     │  human approval            │ →  commit_correction()
-                     │  authorization recheck     │ ←  provider_reference
-                     │  idempotent dispatch       │
-                     │  unknown-outcome handling  │
-                     │  reconciliation            │
-                     │  append-only audit log     │
-                     └───────────────────────────┘
+Your agent (Claude, OpenAI, LangGraph, anything)
+      |
+      | POST /v1/tool-calls
+      |
+┌─────▼──────────────────────────────────────────┐
+│  Action boundary (core protocol)               │
+│  argument validation                           │
+│  policy gate                                   │
+│  proposal creation                             │
+│  human approval                                │
+│  authorization recheck (stale detection)       │ → provider adapter → commit
+│  idempotent dispatch                           │ ← provider_reference
+│  unknown-outcome detection                     │
+│  reconciliation                                │
+│  append-only audit                             │
+└────────────────────────────────────────────────┘
+      |
+      | optional
+      |
+┌─────▼──────────────────────────────────────────┐
+│  Managed runs (reference runtime)              │
+│  POST /v1/runs, /v1/runs/{id}/messages         │
+│  Owns conversation lifecycle and model calls   │
+└────────────────────────────────────────────────┘
 ```
 
-The model proposes an action by calling a tool. The runtime validates the arguments, evaluates the policy, creates a structured proposal for human review, and only creates a command record after a human approves. The command is dispatched to the provider using a stable idempotency key. If the outcome is uncertain (timeout, connection reset), the runtime enters a known reconciliation state rather than retrying blindly.
+**Submit a tool call directly** and the runtime handles the rest. You do not need the managed-run layer. Bring your own conversation manager and pass `context.run_id` or `context.conversation_id` as external references.
 
-This is model-neutral. Any agent that can call an HTTP endpoint can use this runtime.
+**Or use managed runs** if you want the runtime to own the full conversation lifecycle and model orchestration.
+
+---
+
+## Core protocol: POST /v1/tool-calls
+
+The model output is a tool request. The runtime response is not necessarily a tool result:
+
+```
+POST /v1/tool-calls
+Idempotency-Key: tc-run_123-EMP4412-001
+
+{
+  "agent": { "id": "payroll-detective", "version": "0.3.1" },
+  "action": {
+    "tool_name": "prepare_classification_correction",
+    "arguments": {
+      "employee_id": "EMP-4412",
+      "correction_type": "misclassification_contractor_to_employee",
+      "evidence_ids": ["evidence_123"]
+    }
+  },
+  "context": { "actor_id": "user_789" }
+}
+
+→ 200 OK
+{
+  "tool_call_id": "tc_456",
+  "status": "approval_required",
+  "approval": {
+    "approval_id": "approval_234",
+    "risk_level": "high",
+    "expires_at": "2026-09-17T14:23:00Z"
+  },
+  "next_action": "await_approval"
+}
+```
+
+Response `status` is one of: `proposal_created` | `approval_required` | `rejected` | `command_created` | `unknown`. That is the protocol.
 
 ---
 
 ## Six resources
 
-| Resource | Who creates it | Meaning |
-|----------|---------------|---------|
-| `tool_call` | Model (via agent) | A proposed action. Unvalidated at creation. |
-| `proposal` | Action Service | Structured, reviewable description of the intended action. |
-| `proposal_version` | Action Service | Immutable snapshot of one version of a proposal. Append-only. |
-| `approval` | Action Service | A human decision record. |
-| `command` | Action Service | An authorized side-effect instruction. Created only after `authorization.passed`. |
-| `command_attempt` | Command Worker | One attempt to dispatch a command to the provider. |
+| Resource | Meaning |
+|----------|---------|
+| `ToolCall` | Model-proposed action. Unvalidated at submission. |
+| `Proposal` | Structured, reviewable description of the intended action. |
+| `ProposalVersion` | Immutable snapshot of one version. Append-only. |
+| `Approval` | Human decision record tied to a specific proposal version. |
+| `Command` | Authorized side effect. Created only after `authorization.passed`. |
+| `CommandAttempt` | One provider dispatch attempt. |
 
-A command record does not exist until a human has approved the proposal and the runtime has rechecked that the underlying resource has not changed since prepare. The model cannot authorize its own actions.
+A command does not exist until a human approves and the runtime confirms the resource has not changed since prepare. The model cannot authorize its own actions.
 
 ---
 
 ## Golden event sequence
 
-The primary workflow: model proposal through run completion.
-
 ```
-run.started
-run.message_received
-run.tool_proposed
-proposal.drafted
+tool_call.received
+proposal.created
 policy.evaluated
-run.approval_required        ← run pauses here
+approval.required          ← run pauses
 approval.claimed
 approval.approved
-authorization.rechecked      ← stale detection happens here
+authorization.rechecked    ← stale detection happens here
 authorization.passed
-command.created              ← command only exists after this point
+command.created            ← command only exists after this point
 command.dispatched
 command.succeeded
-run.resumed
 run.completed
 ```
 
-Failure branches (stale approval, unknown outcome, approval expired, approval revised) are in [`spec/golden_sequence.json`](spec/golden_sequence.json).
+Failure branches (stale approval, unknown outcome, expired, revised) are in [`spec/golden_sequence.json`](spec/golden_sequence.json).
 
 ---
 
-## What this is not
+## What makes this different
 
-- Not a model SDK. Bring your own agent.
-- Not an agent graph framework. Orchestration lives in your agent.
-- Not a workflow engine. No DAGs, no cron.
-- Not an approval inbox product. The approval console is a thin API client.
-- Not an enterprise automation suite. One governed-action loop, done correctly.
+Policy enforcement, human approval, audit trails, replay, and self-hosting are now common among agent governance products. This project does not compete on those.
 
----
+The differentiation is:
 
-## Phase 0 artifacts (this repo)
-
-Phase 0 is the executable contract: everything needed to evaluate the design, write a conformance test, or build a client before the server exists.
-
-| Artifact | Purpose |
-|----------|---------|
-| [`spec/openapi.yaml`](spec/openapi.yaml) | Full API specification (1,924 lines, OpenAPI 3.1) |
-| [`spec/schemas/`](spec/schemas/) | JSON Schema Draft 2020-12 for all 6 resources |
-| [`spec/events/catalog.yaml`](spec/events/catalog.yaml) | All 20 webhook events with delivery semantics |
-| [`spec/golden_sequence.json`](spec/golden_sequence.json) | Primary event sequence + 4 failure branches |
-| [`spec/state_machines.md`](spec/state_machines.md) | State transition diagrams for all resources |
-| [`spec/error_model.md`](spec/error_model.md) | 13 error codes, conventions, client guidance |
-| [`spec/idempotency.md`](spec/idempotency.md) | Key format, window tiers, provider enforcement |
-| [`spec/auth_model.md`](spec/auth_model.md) | Tenant isolation, scope definitions, identity flow |
-| [`spec/versioning.md`](spec/versioning.md) | Compatibility guarantees, deprecation policy |
-| [`spec/threat_model.md`](spec/threat_model.md) | Injection vectors, authorization boundaries |
-| [`spec/tool_contracts/payroll.json`](spec/tool_contracts/payroll.json) | Tool argument schemas for the payroll domain |
-| [`migrations/001_initial.sql`](migrations/001_initial.sql) | Full Postgres schema with ownership annotations |
-| [`adapters/adapter_interface.py`](adapters/adapter_interface.py) | Python Protocol definition + simulated provider |
-| [`conformance/test_core_endpoints.py`](conformance/test_core_endpoints.py) | pytest conformance suite (golden sequence integration test) |
-| [`client_example.py`](client_example.py) | Minimal client: create run through inspect replay |
-| [`spec/examples/curl_example.sh`](spec/examples/curl_example.sh) | End-to-end curl walkthrough |
+- **Typed provider adapter contract** — `prepare`, `commit`, `verify`, `reconcile` as explicit, separately callable methods with typed request and result objects. Not a generic hook.
+- **Unknown outcome as a first-class state** — not an exception, not an error. `command.status = unknown` is a durable state that blocks retry until reconciliation completes.
+- **Stale approval detection** — `authorization.rechecked` compares provider resource version at approval time against current version before dispatch. A stale approval is invalidated and the human must re-review.
+- **Proposal versioning** — each revision creates an immutable `ProposalVersion` record. The approved version is pinned on the command. Not a field on a mutable record.
+- **REST-first, not SDK-first** — the action boundary is a public HTTP API. No SDK required to integrate.
+- **Apache 2.0** — permissive open source. The closest conceptual competitors use BSL 1.1 or proprietary licensing.
 
 ---
 
-## Quick look: adapter interface
+## Action boundary endpoints (core protocol)
 
-Implement this Protocol to connect the runtime to any provider:
+```
+POST /v1/tool-calls                            ← primary entry point
+GET  /v1/tool-calls/{tool_call_id}
+
+GET  /v1/proposals/{proposal_id}
+GET  /v1/proposals/{proposal_id}/versions
+GET  /v1/proposals/{proposal_id}/versions/{version}
+
+GET  /v1/approvals
+GET  /v1/approvals/{approval_id}
+POST /v1/approvals/{approval_id}/claim
+POST /v1/approvals/{approval_id}/release
+POST /v1/approvals/{approval_id}/approve
+POST /v1/approvals/{approval_id}/reject
+POST /v1/approvals/{approval_id}/revise
+
+GET  /v1/commands
+GET  /v1/commands/{command_id}
+GET  /v1/commands/{command_id}/attempts
+POST /v1/commands/{command_id}/reconcile
+```
+
+## Managed run endpoints (optional reference runtime)
+
+```
+POST /v1/runs
+GET  /v1/runs/{run_id}
+POST /v1/runs/{run_id}/messages
+GET  /v1/runs/{run_id}/events
+POST /v1/runs/{run_id}/cancel
+POST /v1/runs/{run_id}/replay
+```
+
+---
+
+## Provider adapter contract
 
 ```python
 class PayrollProvider(Protocol):
@@ -127,63 +182,57 @@ class PayrollProvider(Protocol):
     async def prepare_correction(
         self, request: PrepareCorrectionRequest
     ) -> CorrectionProposal:
-        # Returns structured proposal. No side effects.
-        # Safe to call multiple times (stale approval recalculation).
+        # No side effects. Safe to call multiple times.
+        # Called at stale approval recalculation too.
         ...
 
     async def commit_correction(
         self, request: CommitCorrectionRequest, idempotency_key: str
     ) -> CommitResult:
-        # CommitResult.status: "committed" | "rejected" | "duplicate" | "unknown"
-        # Return "unknown" on timeout. Do not raise. The runtime reconciles.
+        # status: "committed" | "rejected" | "duplicate" | "unknown"
+        # Return "unknown" on timeout. Do not raise.
         ...
 
     async def reconcile_correction(
         self, request: ReconcileRequest
     ) -> ReconciliationResult:
-        # Called when command.status is "unknown". Not part of normal execution.
-        # Query the provider by idempotency_key to resolve the outcome.
+        # Called only when command.status is "unknown".
+        # Query by idempotency_key. Determine whether the operation committed.
         ...
 ```
 
-Provider capability tiers are declared at startup. Tier 1 (no idempotency): high-risk irreversible actions unavailable by default. Tier 3 (full idempotency + reconciliation): automated reconciliation on unknown outcome.
+See [`adapters/adapter_interface.py`](adapters/adapter_interface.py) for the full Protocol with `verify`, capability tiers, and the `SimulatedPayrollProvider` with failure injection.
 
 ---
 
-## Quick look: minimal client
+## Phase 0 artifacts (this repo)
 
-```python
-from conversational_ops import ConversationalOps   # Phase 1 SDK
-
-client = ConversationalOps(base_url="http://localhost:8080", api_key="...")
-
-run = client.runs.create(agent="payroll-detective")
-
-response = client.runs.send_message(
-    run.id,
-    "Investigate the payroll anomaly for EMP-4412.",
-    idempotency_key=f"msg-{run.id}-001",
-)
-# 202 Accepted, status: awaiting_approval
-
-if response.status == "awaiting_approval":
-    approval = client.approvals.get(response.pending_approval.approval_id)
-    client.approvals.claim(approval.id)
-    client.approvals.approve(
-        approval.id,
-        proposal_version=approval.current_version,
-    )
-```
-
-See [`client_example.py`](client_example.py) for the full walkthrough (raw HTTP, no SDK required).
+| Artifact | Purpose |
+|----------|---------|
+| [`spec/openapi.yaml`](spec/openapi.yaml) | Full API specification (OpenAPI 3.1) |
+| [`spec/schemas/`](spec/schemas/) | JSON Schema Draft 2020-12 for all resources |
+| [`spec/events/catalog.yaml`](spec/events/catalog.yaml) | 20 webhook events with delivery semantics |
+| [`spec/golden_sequence.json`](spec/golden_sequence.json) | Primary event sequence + failure branches |
+| [`spec/state_machines.md`](spec/state_machines.md) | State transition diagrams |
+| [`spec/error_model.md`](spec/error_model.md) | Error codes and client guidance |
+| [`spec/idempotency.md`](spec/idempotency.md) | Key format, window tiers, provider enforcement |
+| [`spec/auth_model.md`](spec/auth_model.md) | Tenant isolation, scope definitions |
+| [`spec/versioning.md`](spec/versioning.md) | Compatibility guarantees, deprecation policy |
+| [`spec/threat_model.md`](spec/threat_model.md) | Injection vectors, authorization boundaries |
+| [`spec/tool_contracts/payroll.json`](spec/tool_contracts/payroll.json) | Tool argument schemas for payroll domain |
+| [`migrations/001_initial.sql`](migrations/001_initial.sql) | Postgres schema with ownership annotations |
+| [`adapters/adapter_interface.py`](adapters/adapter_interface.py) | Python Protocol + simulated provider |
+| [`conformance/test_core_endpoints.py`](conformance/test_core_endpoints.py) | pytest conformance suite |
+| [`client_example.py`](client_example.py) | End-to-end client walkthrough (raw HTTP) |
+| [`spec/examples/curl_example.sh`](spec/examples/curl_example.sh) | curl walkthrough |
 
 ---
 
 ## Status
 
-**Phase 0 (this repo): complete.** Spec, schemas, event catalog, database migration, adapter interface, conformance tests, curl example.
+**Phase 0: complete.** Spec, schemas, event catalog, database schema, adapter interface, conformance tests.
 
-**Phase 1 (in progress):** Agent API, Action Service, Command Worker, PostgreSQL, Claude Sonnet 4.6 as model, SimulatedPayrollProvider, minimal approval console. Exit criteria: one full governed-action loop end-to-end, audit events matching the golden sequence, inspect replay without side effects.
+**Phase 1 (next):** Agent API, Action Service, Command Worker, PostgreSQL, Claude Sonnet 4.6 as model, SimulatedPayrollProvider, minimal approval console. Exit criteria: one full governed-action loop end-to-end with audit events matching the golden sequence and inspect replay without side effects.
 
 ---
 

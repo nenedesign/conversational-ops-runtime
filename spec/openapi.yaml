@@ -4,27 +4,34 @@ info:
   title: Conversational Operations Runtime API
   version: "2026-09-01"
   description: |
-    A governed action boundary for AI agents. Turns model tool requests into
-    policy-checked, approval-gated, idempotent, auditable business operations.
+    A typed business-action protocol for AI agents. Turns model tool requests
+    into policy-checked, approval-gated, idempotent, verifiable operational
+    effects — with explicit unknown-outcome handling and provider reconciliation.
 
-    The model proposes. The action service decides.
+    ## Two layers
 
-    This runtime is model-neutral. Agents built with Claude, OpenAI, LangGraph,
-    or any custom orchestrator submit tool requests to the same API and receive
-    the same governed response.
+    **Action boundary (core protocol)** — Submit a tool request at
+    `POST /v1/tool-calls`. The runtime validates arguments, evaluates policy,
+    creates a structured proposal, requires human approval for high-risk actions,
+    performs an authorization recheck at commit time, dispatches idempotently,
+    and handles unknown outcomes. These endpoints are the product. They do not
+    require adopting the managed-run layer.
 
-    ## Resource model
+    **Managed runs (optional reference runtime)** — If you want the runtime to
+    own your full conversation lifecycle, use the `/v1/runs` endpoints. These are
+    optional. Bring your own conversation manager and submit tool calls directly
+    if you prefer.
+
+    ## Six resources
 
     | Resource | What it represents |
     |----------|-------------------|
-    | `Run` | An agent session — owns the lifecycle from first message to completion |
-    | `ToolCall` | What the model requested — recorded when model output is received |
-    | `Proposal` | What the system recommends doing — created from a tool call |
-    | `ProposalVersion` | One immutable version of a proposal |
-    | `Approval` | A human decision on a specific proposal version |
-    | `Command` | An authorized side effect — created only after final authorization passes |
-    | `CommandAttempt` | One provider dispatch attempt |
-    | `Handoff` | An agent-to-agent state transition |
+    | `ToolCall` | A model-proposed action. Unvalidated at submission. |
+    | `Proposal` | A structured, reviewable description of the intended action. |
+    | `ProposalVersion` | One immutable snapshot of a proposal. Append-only. |
+    | `Approval` | A human decision record tied to a specific proposal version. |
+    | `Command` | An authorized side effect. Created only after `authorization.passed`. |
+    | `CommandAttempt` | One provider dispatch attempt. |
 
     ## Idempotency
 
@@ -49,14 +56,29 @@ security:
   - BearerToken: []
 
 tags:
-  - name: runs
-    description: Agent session lifecycle
+  - name: tool-calls
+    description: |
+      Action boundary — primary entry point. Submit a model tool request and
+      receive a governed response. Does not require the managed-run layer.
   - name: proposals
-    description: System recommendations for action
+    description: |
+      Action boundary — structured proposals created from tool calls.
+      Versioned, reviewable, policy-evaluated.
   - name: approvals
-    description: Human decisions on proposals
+    description: |
+      Action boundary — human decision records. One approval per proposal.
+      Supports claim/release, revision, version-specific decisions.
   - name: commands
-    description: Authorized side effects and dispatch
+    description: |
+      Action boundary — authorized side effects. Created only after
+      authorization.passed. Idempotent dispatch, unknown-outcome handling,
+      provider reconciliation.
+  - name: managed-runs
+    description: |
+      Optional managed runtime. Owns full conversation lifecycle including
+      model orchestration, run state, and event log. Use this if you want
+      the runtime to manage your conversation. Skip it if you manage your
+      own conversation and only need the action boundary.
   - name: handoffs
     description: Agent-to-agent state transitions
   - name: config
@@ -65,7 +87,119 @@ tags:
 paths:
 
   # ─────────────────────────────────────────────
-  # RUNS
+  # ACTION BOUNDARY — core protocol
+  # ─────────────────────────────────────────────
+
+  /v1/tool-calls:
+    post:
+      operationId: submitToolCall
+      summary: Submit a tool request
+      description: |
+        Primary action boundary entry point. The model output is a tool request.
+        The runtime response is not necessarily a tool result — it may be
+        `proposal_created`, `approval_required`, `rejected`, `command_created`,
+        or `unknown`.
+
+        The runtime validates arguments against the tool contract schema,
+        evaluates policy, creates a proposal, and returns the current status.
+        If the action requires human approval, the response includes the
+        approval reference and next_action is `await_approval`.
+
+        Does not require the managed-run layer. Integrators managing their
+        own conversation can submit tool calls directly using `context.run_id`
+        or `context.conversation_id` as external references.
+      tags: [tool-calls]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToolCallSubmissionRequest"
+            example:
+              agent:
+                id: "payroll-detective"
+                version: "0.3.1"
+              action:
+                tool_name: "prepare_classification_correction"
+                arguments:
+                  employee_id: "EMP-4412"
+                  correction_type: "misclassification_contractor_to_employee"
+                  evidence_ids: ["evidence_123", "evidence_456"]
+              context:
+                actor_id: "user_789"
+                run_id: "run_abc"
+              metadata:
+                model_provider: "anthropic"
+                model_id: "claude-sonnet-4-6"
+                tool_schema_version: "payroll-tools-v1"
+      responses:
+        "200":
+          description: |
+            Tool call processed. Status indicates the current disposition.
+            `proposal_created` — proposal exists, policy allows, no approval needed.
+            `approval_required` — proposal exists and requires human review.
+            `rejected` — policy blocked the action.
+            `command_created` — action authorized and command queued (low-risk, no approval path).
+            `unknown` — outcome uncertain; do not retry. Subscribe to reconciliation.completed.
+          headers:
+            X-Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCallSubmissionResponse"
+              example:
+                tool_call_id: "tc_456"
+                status: "approval_required"
+                proposal:
+                  proposal_id: "prop_789"
+                  current_version: 1
+                  status: "awaiting_approval"
+                approval:
+                  approval_id: "approval_234"
+                  status: "pending"
+                  risk_level: "high"
+                  expires_at: "2026-09-17T14:23:00Z"
+                next_action: "await_approval"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+
+  /v1/tool-calls/{tool_call_id}:
+    get:
+      operationId: getToolCall
+      summary: Get a submitted tool call
+      description: |
+        Retrieve the current state of a submitted tool call, including its
+        associated proposal and approval references.
+      tags: [tool-calls]
+      parameters:
+        - name: tool_call_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tool call
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCall"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─────────────────────────────────────────────
+  # MANAGED RUNS — optional reference runtime
   # ─────────────────────────────────────────────
 
   /v1/runs:
@@ -75,7 +209,7 @@ paths:
       description: |
         Creates a new agent run. The tenant is derived from the authenticated
         credential — do not supply tenant_id in the request body.
-      tags: [runs]
+      tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -106,7 +240,7 @@ paths:
     get:
       operationId: listRuns
       summary: List runs
-      tags: [runs]
+      tags: [managed-runs]
       parameters:
         - name: agent_id
           in: query
@@ -132,7 +266,7 @@ paths:
     get:
       operationId: getRun
       summary: Get run state
-      tags: [runs]
+      tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/RunId"
       responses:
@@ -156,7 +290,7 @@ paths:
         `202 Accepted` when the run continues processing asynchronously —
         which is the normal case. `200 OK` is returned only if the run
         completes synchronously.
-      tags: [runs]
+      tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/RunId"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -203,7 +337,7 @@ paths:
         Returns the append-only event log for a run. This is the reliable recovery
         source when a webhook is missed. Webhooks are delivery mechanisms; the
         event stream is the source of truth.
-      tags: [runs]
+      tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/RunId"
         - $ref: "#/components/parameters/After"
@@ -224,7 +358,7 @@ paths:
     get:
       operationId: getRunState
       summary: Get full run state snapshot
-      tags: [runs]
+      tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/RunId"
       responses:
@@ -243,7 +377,7 @@ paths:
     get:
       operationId: listToolCalls
       summary: List tool calls for a run
-      tags: [runs]
+      tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/RunId"
       responses:
@@ -267,7 +401,7 @@ paths:
     post:
       operationId: cancelRun
       summary: Cancel a run
-      tags: [runs]
+      tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/RunId"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -313,7 +447,7 @@ paths:
         - `resume`: Continue an interrupted run from the last recognized resumable
           state. Identifies the last completed side effect and resumes from the next
           state without repeating it.
-      tags: [runs]
+      tags: [managed-runs]
       parameters:
         - $ref: "#/components/parameters/RunId"
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -1792,6 +1926,144 @@ components:
           enum: [role, user]
         id:
           type: string
+
+    # ── Tool call submission ─────────────────
+
+    ToolCallSubmissionRequest:
+      type: object
+      required: [action]
+      properties:
+        agent:
+          type: object
+          properties:
+            id:
+              type: string
+              description: Agent identifier declared in your config.
+            version:
+              type: string
+              description: Agent version. Recorded in the audit trail.
+          additionalProperties: false
+        action:
+          type: object
+          required: [tool_name, arguments]
+          properties:
+            tool_name:
+              type: string
+              description: Must match a tool name in your tool contract schema.
+            arguments:
+              type: object
+              description: |
+                Raw model arguments. Validated against the tool contract schema
+                before the prepare stage runs.
+          additionalProperties: false
+        context:
+          type: object
+          properties:
+            actor_id:
+              type: string
+              description: |
+                User or service identity initiating this action. Recorded in
+                audit and approval records. Tenant is always resolved from the
+                API key — do not supply tenant_id.
+            run_id:
+              type: string
+              description: |
+                Optional. Associates this tool call with an existing managed run.
+                Omit if you are managing your own conversation.
+            conversation_id:
+              type: string
+              description: |
+                Optional. Your external conversation reference. Recorded in the
+                audit trail. Does not affect runtime behavior.
+          additionalProperties: false
+        metadata:
+          type: object
+          properties:
+            model_provider:
+              type: string
+            model_id:
+              type: string
+            tool_schema_version:
+              type: string
+          additionalProperties: true
+      additionalProperties: false
+
+    ToolCallSubmissionResponse:
+      type: object
+      required: [tool_call_id, status, next_action]
+      properties:
+        tool_call_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - proposal_created
+            - approval_required
+            - rejected
+            - command_created
+            - unknown
+          description: |
+            `proposal_created` — proposal exists; policy allows without approval.
+            `approval_required` — proposal requires human review before commit.
+            `rejected` — policy blocked the action; no proposal or command created.
+            `command_created` — authorized and queued (no-approval policy path).
+            `unknown` — outcome uncertain; subscribe to reconciliation.completed.
+        proposal:
+          type: object
+          nullable: true
+          properties:
+            proposal_id:
+              type: string
+              format: uuid
+            current_version:
+              type: integer
+            status:
+              type: string
+          description: Present when status is proposal_created or approval_required.
+        approval:
+          type: object
+          nullable: true
+          properties:
+            approval_id:
+              type: string
+              format: uuid
+            status:
+              type: string
+            risk_level:
+              type: string
+              enum: [low, medium, high]
+            expires_at:
+              type: string
+              format: date-time
+              nullable: true
+          description: Present when status is approval_required.
+        command:
+          type: object
+          nullable: true
+          properties:
+            command_id:
+              type: string
+              format: uuid
+            status:
+              type: string
+          description: Present when status is command_created or unknown.
+        rejection_reason:
+          type: string
+          nullable: true
+          description: Present when status is rejected.
+        next_action:
+          type: string
+          enum:
+            - await_approval
+            - await_command
+            - complete
+            - error
+          description: |
+            `await_approval` — poll GET /v1/approvals/{id} or subscribe to approval events.
+            `await_command` — poll GET /v1/commands/{id} or subscribe to command events.
+            `complete` — no further action required.
+            `error` — the action was rejected or failed; check rejection_reason.
 
     # ── Error model ──────────────────────────
 
