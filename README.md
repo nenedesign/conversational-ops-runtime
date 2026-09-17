@@ -1,6 +1,6 @@
 # Conversational AI Operations Runtime
 
-**The missing governance and safety layer between AI agents and critical business systems.**
+**A production-grade open-source API for teams building AI agents in regulated industries. Sits between the AI model and business systems (payroll, HR, ERP), enforcing policy, routing high-risk actions to human approval, and keeping a full audit trail of every action the agent takes. Built for environments where AI cannot act without oversight.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
