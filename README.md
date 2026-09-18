@@ -2,7 +2,7 @@
 
 **A production-grade open-source API (Apache 2.0) for teams building AI agents in regulated industries. Sits between the AI model and business systems (payroll, HR, ERP) and governs every action the agent takes before any side effect occurs.**
 
-**Two design choices distinguish it from comparable runtimes: `command.status = unknown` is a durable, recoverable state the runtime blocks on and reconciles, not an exception to surface to the caller; and stale approval detection rechecks the provider resource version immediately before dispatch, invalidating any approval made against an outdated record.**
+**Two design choices distinguish it from comparable runtimes:** `command.status = unknown` is a durable, recoverable state the runtime blocks on and reconciles, not an exception to surface to the caller; and stale approval detection rechecks the provider resource version immediately before dispatch, invalidating any approval made against an outdated record.
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
