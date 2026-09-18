@@ -420,5 +420,5 @@ Apache 2.0. See [LICENSE](LICENSE).
 
 ---
 
-**Neville Ko**, AI Product Manager and Builder  
+**Neville Ko**, AI Product Manager, Designer & Builder  
 [Portfolio](https://www.fromus.ca) · [LinkedIn](https://www.linkedin.com/in/nevilleko/)
