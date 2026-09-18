@@ -61,6 +61,22 @@ This runtime is that layer, built once, as a protocol, separate from the model.
 
 ---
 
+## How it compares
+
+| | This runtime | AxonFlow | JamJet | Tandem |
+|---|:-:|:-:|:-:|:-:|
+| License | Apache 2.0 | BSL 1.1 | Apache 2.0 | Proprietary |
+| Unknown outcome as first-class state | ✓ | ? | ? | ? |
+| Stale approval detection | ✓ | ? | ? | ? |
+| Typed provider adapter contract | ✓ | ? | ? | ? |
+| REST-first (no SDK required) | ✓ | ? | ? | ? |
+
+`?` = not confirmed from documentation review. Hands-on testing pending.
+
+[Full feature matrix](docs/competitive-matrix.md) · [Per-product notes](docs/competitor-notes/)
+
+---
+
 ## Two layers
 
 ```text
