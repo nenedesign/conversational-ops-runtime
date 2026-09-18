@@ -38,7 +38,7 @@ flowchart LR
     HM --> TA[Specialist Agent\nBorder · Legal · Finance]
 
     style Runtime fill:#f5f5f5,stroke:#1A1A2E,stroke-width:2px
-    style H fill:#ffffff,stroke:#999999,stroke-dasharray:4
+    style H fill:#1A1A2E,color:#ffffff,stroke:#1A1A2E
 ```
 
 ---
