@@ -22,8 +22,11 @@ The table-stakes capabilities — policy gating, human approval, audit trail —
 | **Stale approval detection** | **✓** | – | – | – |
 | **Typed domain adapter contract** | **✓** | – | – | – |
 | **REST-first (no SDK required)** | **✓** | – | – | – |
+| Docker Compose packaging | Planned | ✓ | ✓ | ? |
+| OpenTelemetry traces | Planned | ✓ | ? | ? |
+| Second domain adapter | Planned | ? | ? | ? |
 
-`–` = not documented in public sources. Based on documentation review; hands-on testing pending.
+`–` = not documented in public sources · `Planned` = on the roadmap, not yet built · `?` = unknown. Based on documentation review; hands-on testing pending.
 
 [Full feature matrix](docs/competitive-matrix.md) · [Per-product notes](docs/competitor-notes/)
 
