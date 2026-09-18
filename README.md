@@ -8,6 +8,41 @@
 
 ---
 
+```mermaid
+flowchart LR
+    A[AI Agent\nClaude Sonnet 4.6] --> RL
+    T[External Trigger] --> RL
+
+    subgraph Runtime [Conversational AI Operations Runtime]
+        RL[Run Manager\nConversation Lifecycle]
+        PG[Policy Gate\nArgument Validation]
+        AG[Approval Gate\nStale Detection]
+        H[Human Approver]
+        CW[Command Worker\nBackground Dispatch]
+        HM[Handoff Manager\nAuthority Boundaries]
+        AL[(Audit Log\nAppend-only · Postgres)]
+
+        RL --> PG
+        RL --> HM
+        PG -->|low-risk| CW
+        PG -->|high-risk| AG
+        AG -->|awaiting| H
+        H -->|approved| AG
+        AG --> CW
+        PG --> AL
+        AG --> AL
+        CW --> AL
+    end
+
+    CW --> BS[Business Systems\nPayroll · HR · ERP]
+    HM --> TA[Specialist Agent\nBorder · Legal · Finance]
+
+    style Runtime fill:#f5f5f5,stroke:#1A1A2E,stroke-width:2px
+    style H fill:#ffffff,stroke:#999999,stroke-dasharray:4
+```
+
+---
+
 ## The problem
 
 AI agents that modify business systems (payroll, booking, HR, ERP) need a layer between the model and the provider that handles: argument validation, policy evaluation, human approval, idempotent commit, unknown outcomes, and audit. Most teams build this for every integration point, duplicated and inconsistent.
