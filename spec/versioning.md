@@ -65,4 +65,4 @@ Webhook events include `api_version` in the envelope. Tenants may pin their webh
 
 | Version | Status | EOL |
 |---------|--------|-----|
-| `2026-09-01` | Current | — |
+| `2026-09-01` | Current | N/A |

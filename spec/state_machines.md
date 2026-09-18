@@ -9,9 +9,9 @@ State transitions for each of the six primary resources. All transitions are rec
 ```
 created
   → active          (run.started)
-  → approval_required  (run.approval_required — model proposed a high-risk action)
-  → awaiting_user   (run.awaiting_user — model needs clarification)
-  → escalated       (run.escalated — beyond agent authority)
+  → approval_required  (run.approval_required: model proposed a high-risk action)
+  → awaiting_user   (run.awaiting_user: model needs clarification)
+  → escalated       (run.escalated: beyond agent authority)
 
 active
   → approval_required
@@ -22,7 +22,7 @@ active
   → cancelled       (run.cancelled)
 
 approval_required
-  → active          (run.resumed — after command.succeeded)
+  → active          (run.resumed: after command.succeeded)
   → failed
   → cancelled
 
@@ -31,7 +31,7 @@ awaiting_user
   → cancelled
 
 escalated
-  → (terminal — human specialist takes over; run is closed)
+  → (terminal: human specialist takes over; run is closed)
 
 completed  (terminal)
 failed     (terminal)
@@ -45,26 +45,26 @@ cancelled  (terminal)
 ```
 drafted
   → pending_approval   (approval created, requires_approval: true)
-  → approved           (policy gate passed, no approval required — policy_outcome: approved)
-  → rejected           (policy gate blocked — policy_outcome: rejected)
+  → approved           (policy gate passed, no approval required; policy_outcome: approved)
+  → rejected           (policy gate blocked; policy_outcome: rejected)
 
 pending_approval
   → approved           (approval.approved decision recorded)
   → rejected           (approval.rejected decision recorded)
   → cancelled          (run cancelled)
 
-approved   (terminal within proposal lifecycle — command.created follows)
+approved   (terminal within proposal lifecycle; command.created follows)
 rejected   (terminal)
 cancelled  (terminal)
 ```
 
-Revision does not change the proposal's status — it creates a new `proposal_version` record and resets the associated approval to `pending`.
+Revision does not change the proposal's status; it creates a new `proposal_version` record and resets the associated approval to `pending`.
 
 ---
 
 ## Proposal version
 
-Proposal versions are immutable. There is no state machine — each version is a point-in-time snapshot created either by the prepare stage or by a human revision.
+Proposal versions are immutable. There is no state machine; each version is a point-in-time snapshot created either by the prepare stage or by a human revision.
 
 ---
 
@@ -73,9 +73,9 @@ Proposal versions are immutable. There is no state machine — each version is a
 ```
 pending
   → claimed            (reviewer called /claim)
-  → approved           (no-claim direct approval — allowed by policy)
+  → approved           (no-claim direct approval; allowed by policy)
   → rejected
-  → revised            (reviewer submitted a revision — new proposal_version created, approval returns to pending)
+  → revised            (reviewer submitted a revision; new proposal_version created, approval returns to pending)
   → expired            (expires_at passed without a decision)
   → cancelled          (run cancelled)
 
@@ -83,15 +83,15 @@ claimed
   → approved           (reviewer called /approve)
   → rejected           (reviewer called /reject)
   → revised            (reviewer called /revise)
-  → pending            (/release called — claim dropped)
+  → pending            (/release called; claim dropped)
   → expired
   → cancelled
 
-revised → pending      (immediately — revision resets the approval)
+revised → pending      (immediately; revision resets the approval)
 
-approved   (terminal — triggers authorization.rechecked, then authorization.passed or stale detection)
+approved   (terminal; triggers authorization.rechecked, then authorization.passed or stale detection)
 rejected   (terminal)
-expired    (terminal — proposal is recalculated, new approval created)
+expired    (terminal; proposal is recalculated, new approval created)
 cancelled  (terminal)
 ```
 
@@ -106,19 +106,19 @@ created
   → dispatched         (command worker sent request to provider)
 
 dispatched
-  → succeeded          (provider confirmed committed — command.succeeded)
-  → failed             (provider rejected — command.failed; will not retry)
-  → unknown            (timeout, connection reset — command.unknown)
+  → succeeded          (provider confirmed committed; command.succeeded)
+  → failed             (provider rejected; command.failed; will not retry)
+  → unknown            (timeout, connection reset; command.unknown)
 
 unknown
-  → (reconciliation in progress — do not retry)
+  → (reconciliation in progress; do not retry)
   → succeeded          (reconciliation.completed with resolution: succeeded)
   → failed             (reconciliation.completed with resolution: failed)
-  → unknown            (reconciliation.completed with resolution: still_unknown — manual intervention required)
+  → unknown            (reconciliation.completed with resolution: still_unknown; manual intervention required)
 
 succeeded  (terminal)
 failed     (terminal)
-cancelled  (terminal — only from created state, before dispatch)
+cancelled  (terminal; only from created state, before dispatch)
 ```
 
 ---
@@ -127,8 +127,8 @@ cancelled  (terminal — only from created state, before dispatch)
 
 ```
 created
-  → completed          (receiving agent confirmed active — handoff.completed)
-  → failed             (receiving agent could not accept — run transitions to failed or escalated)
+  → completed          (receiving agent confirmed active; handoff.completed)
+  → failed             (receiving agent could not accept; run transitions to failed or escalated)
 ```
 
 ---
@@ -141,6 +141,6 @@ created
 
 3. A run can be cancelled from any non-terminal state. Cancellation propagates to open commands (sets `cancelled` if not yet `dispatched`) and open approvals.
 
-4. A stale approval is not a state — it is a transition trigger. When `authorization.rechecked` detects that the resource version has changed since `prepare`, the approval returns to `pending` with a new proposal version. There is no `stale` status on the approval record.
+4. A stale approval is not a state; it is a transition trigger. When `authorization.rechecked` detects that the resource version has changed since `prepare`, the approval returns to `pending` with a new proposal version. There is no `stale` status on the approval record.
 
 5. Proposal versions are immutable. Revision creates a new version record; the old one is preserved in the audit trail.

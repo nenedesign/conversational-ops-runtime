@@ -22,8 +22,8 @@ Use UUIDs (v4). Keys must be:
 - Stable across retry attempts for the same logical operation
 - Different for semantically different requests (different approvals, different runs, different proposal versions)
 
-Bad: `approve-{approval_id}` — not unique if the approval is revised and re-approved  
-Good: `approve-{approval_id}-v{proposal_version}` — scoped to the exact version being approved
+Bad: `approve-{approval_id}` (not unique if the approval is revised and re-approved)  
+Good: `approve-{approval_id}-v{proposal_version}` (scoped to the exact version being approved)
 
 ---
 

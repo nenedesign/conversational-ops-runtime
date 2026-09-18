@@ -32,8 +32,8 @@ Feature comparison based on public documentation and repository review. Hands-on
 
 | Product | Relationship |
 |---------|-------------|
-| **LangGraph** | Agent orchestration framework — sits above the action boundary, not beside it |
-| **Temporal** | Durable workflow engine — handles retries and state machines, not agent governance |
+| **LangGraph** | Agent orchestration framework: sits above the action boundary, not beside it |
+| **Temporal** | Durable workflow engine: handles retries and state machines, not agent governance |
 
 LangGraph and Temporal are better understood as integration targets. An agent built on LangGraph could submit tool calls to this runtime's action boundary. Temporal could back the command worker dispatch loop.
 
@@ -45,9 +45,9 @@ LangGraph and Temporal are better understood as integration targets. An agent bu
 
 **Unknown outcome and stale detection are not documented elsewhere.** From documentation review, no comparable product explicitly documents `unknown` as a durable command state with a separate reconciliation path, or describes rechecking provider resource version immediately before dispatch. This may mean the feature is absent, undocumented, or handled differently. Hands-on testing is needed to confirm.
 
-**JamJet is the closest Apache 2.0 alternative.** Self-described as "an action-control plane for AI agents" — framing and scope overlap significantly. The licensing position is identical. Hands-on evaluation of JamJet is the highest-priority competitive test.
+**JamJet is the closest Apache 2.0 alternative.** Self-described as "an action-control plane for AI agents"; framing and scope overlap significantly. The licensing position is identical. Hands-on evaluation of JamJet is the highest-priority competitive test.
 
-**Three roadmap items close known gaps.** Docker Compose packaging and OpenTelemetry traces are confirmed in AxonFlow — adding them brings deployment and observability to parity. The second domain adapter is the most strategically important: it validates that the typed provider contract is genuinely domain-agnostic, not payroll-specific.
+**Three roadmap items close known gaps.** Docker Compose packaging and OpenTelemetry traces are confirmed in AxonFlow; adding them brings deployment and observability to parity. The second domain adapter is the most strategically important: it validates that the typed provider contract is genuinely domain-agnostic, not payroll-specific.
 
 ---
 

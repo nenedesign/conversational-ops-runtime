@@ -2,7 +2,7 @@
 
 ## Tenant isolation
 
-Every tenant is a separate data boundary. Tenants are identified by API key — the key encodes the tenant scope. There is no `tenant_id` parameter on any client-facing endpoint.
+Every tenant is a separate data boundary. Tenants are identified by API key; the key encodes the tenant scope. There is no `tenant_id` parameter on any client-facing endpoint.
 
 Attempting to access a resource from another tenant returns `404 not_found`, not `403 forbidden`. This prevents tenant enumeration.
 
@@ -42,7 +42,7 @@ The Action Service trusts the identity context established by the Agent API. It 
 
 ## User identity in approvals
 
-Approval decisions (`/approve`, `/reject`, `/revise`, `/claim`) require the `approvals:decide` scope. The `approver_id` recorded in the approval record is the user identity from the API key — not a value the client supplies in the request body.
+Approval decisions (`/approve`, `/reject`, `/revise`, `/claim`) require the `approvals:decide` scope. The `approver_id` recorded in the approval record is the user identity from the API key, not a value the client supplies in the request body.
 
 If a key with `approvals:decide` is used in an automated pipeline (rather than by a human approver), this is a misconfiguration. The approval record will reflect the automated identity, which is visible in the audit log.
 

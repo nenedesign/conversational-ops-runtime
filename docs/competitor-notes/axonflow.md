@@ -1,4 +1,4 @@
-# AxonFlow — Research Notes
+# AxonFlow: Research Notes
 
 **Source:** Public repository and documentation review only. Hands-on testing not yet completed.
 
@@ -30,9 +30,9 @@ Enterprise platform. Broad feature set covering policy enforcement, human approv
 
 ---
 
-## Capabilities — what is and is not confirmed
+## Capabilities: what is and is not confirmed
 
-From public documentation review only — values not independently verified by running the product.
+From public documentation review only; values not independently verified by running the product.
 
 | Capability | Status |
 |-----------|--------|

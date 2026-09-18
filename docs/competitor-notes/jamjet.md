@@ -1,4 +1,4 @@
-# JamJet — Research Notes
+# JamJet: Research Notes
 
 **Source:** Public documentation review only. Hands-on testing not yet completed.
 
@@ -24,7 +24,7 @@ Action-control plane. The framing closely overlaps with this runtime's "sits bet
 
 ---
 
-## Capabilities — what is and is not confirmed
+## Capabilities: what is and is not confirmed
 
 From public documentation review only.
 
@@ -45,7 +45,7 @@ From public documentation review only.
 
 ## Notes
 
-JamJet is the closest competitor from a licensing and positioning standpoint. The overlap in language ("action-control plane" vs "action boundary") suggests similar problem framing. Whether the specific mechanisms are equivalent — particularly unknown outcome handling, stale detection, and the typed adapter contract — is the core evaluation question.
+JamJet is the closest competitor from a licensing and positioning standpoint. The overlap in language ("action-control plane" vs "action boundary") suggests similar problem framing. Whether the specific mechanisms are equivalent (particularly unknown outcome handling, stale detection, and the typed adapter contract) is the core evaluation question.
 
 JamJet appears to be at an earlier stage than AxonFlow based on documentation completeness. This may mean smaller feature surface, or simply less documentation.
 

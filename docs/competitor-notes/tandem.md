@@ -1,4 +1,4 @@
-# Tandem — Research Notes
+# Tandem: Research Notes
 
 **Source:** Public documentation review only. Hands-on testing not yet completed.
 
@@ -20,11 +20,11 @@ Not confirmed. Enterprise-focused positioning suggests proprietary licensing, bu
 
 ## Positioning
 
-Authority layer. The emphasis is on defining and enforcing what agents are permitted to do — closer to a policy and permission model than a full action execution runtime. Enterprise focus.
+Authority layer. The emphasis is on defining and enforcing what agents are permitted to do, closer to a policy and permission model than a full action execution runtime. Enterprise focus.
 
 ---
 
-## Capabilities — what is and is not confirmed
+## Capabilities: what is and is not confirmed
 
 From public documentation review only.
 
@@ -46,7 +46,7 @@ From public documentation review only.
 
 ## Notes
 
-Of the three closest comparisons, Tandem is the most differentiated in framing — it emphasizes authority and permission modeling rather than the action execution lifecycle. The overlap with this runtime is primarily in the policy and approval layer; the provider adapter contract, dispatch lifecycle, and unknown outcome handling are not directly addressed in public documentation.
+Of the three closest comparisons, Tandem is the most differentiated in framing; it emphasizes authority and permission modeling rather than the action execution lifecycle. The overlap with this runtime is primarily in the policy and approval layer; the provider adapter contract, dispatch lifecycle, and unknown outcome handling are not directly addressed in public documentation.
 
 Enterprise focus and apparent proprietary licensing make it a less direct comparison than AxonFlow or JamJet for teams evaluating open-source options.
 
