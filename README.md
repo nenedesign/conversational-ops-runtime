@@ -8,6 +8,20 @@
 [![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
 [![Status](https://img.shields.io/badge/Status-Phase_4_Complete-green.svg)](#status)
 
+## How it compares
+
+| | This runtime | AxonFlow | JamJet | Tandem |
+|---|:-:|:-:|:-:|:-:|
+| License | Apache 2.0 | BSL 1.1 | Apache 2.0 | Proprietary |
+| Unknown outcome as first-class state | ✓ | ? | ? | ? |
+| Stale approval detection | ✓ | ? | ? | ? |
+| Typed provider adapter contract | ✓ | ? | ? | ? |
+| REST-first (no SDK required) | ✓ | ? | ? | ? |
+
+`?` = not confirmed from documentation review. Hands-on testing pending.
+
+[Full feature matrix](docs/competitive-matrix.md) · [Per-product notes](docs/competitor-notes/)
+
 ---
 
 ```mermaid
@@ -58,22 +72,6 @@ This runtime is that layer, built once, as a protocol, separate from the model.
 - **Typed provider adapter contract** — `prepare`, `commit`, `verify`, and `reconcile` are explicitly callable methods with typed request and result objects; the contract is defined once and enforced by the conformance suite
 - **Multi-agent handoffs** — transfer context across authority boundaries without leaking full conversation history; the receiving agent gets a scoped context package, not the source session
 - **Policy-gated execution** — intercept model tool calls and route high-risk operations to human approval before any side effect occurs
-
----
-
-## How it compares
-
-| | This runtime | AxonFlow | JamJet | Tandem |
-|---|:-:|:-:|:-:|:-:|
-| License | Apache 2.0 | BSL 1.1 | Apache 2.0 | Proprietary |
-| Unknown outcome as first-class state | ✓ | ? | ? | ? |
-| Stale approval detection | ✓ | ? | ? | ? |
-| Typed provider adapter contract | ✓ | ? | ? | ? |
-| REST-first (no SDK required) | ✓ | ? | ? | ? |
-
-`?` = not confirmed from documentation review. Hands-on testing pending.
-
-[Full feature matrix](docs/competitive-matrix.md) · [Per-product notes](docs/competitor-notes/)
 
 ---
 
