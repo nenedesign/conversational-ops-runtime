@@ -1,6 +1,8 @@
 # Conversational AI Operations Runtime
 
-**A production-grade open-source API for teams building AI agents in regulated industries. Sits between the AI model and business systems (payroll, HR, ERP), enforcing policy, routing high-risk actions to human approval, and keeping a full audit trail of every action the agent takes. Built for environments where AI cannot act without oversight.**
+**A production-grade open-source API (Apache 2.0) for teams building AI agents in regulated industries. Sits between the AI model and business systems (payroll, HR, ERP) and governs every action the agent takes before any side effect occurs.**
+
+**Two design choices distinguish it from comparable runtimes: `command.status = unknown` is a durable, recoverable state the runtime blocks on and reconciles, not an exception to surface to the caller; and stale approval detection rechecks the provider resource version immediately before dispatch, invalidating any approval made against an outdated record.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python](https://img.shields.io/badge/Python-3.13+-blue.svg)](https://www.python.org/)
@@ -51,10 +53,11 @@ This runtime is that layer, built once, as a protocol, separate from the model.
 
 ## Key capabilities
 
-- **Policy-gated execution** — intercept model tool calls and route high-risk operations to human approval before any side effect occurs
-- **Stale approval detection** — recheck provider resource state right before dispatch; if the record changed since the agent prepared the proposal, the approval is invalidated and the human must re-review
 - **First-class unknown state** — `command.status = unknown` is a durable, recoverable state, not an exception; the runtime blocks retry until reconciliation confirms or denies the outcome
+- **Stale approval detection** — recheck provider resource state right before dispatch; if the record changed since the agent prepared the proposal, the approval is invalidated and the human must re-review
+- **Typed provider adapter contract** — `prepare`, `commit`, `verify`, and `reconcile` are explicitly callable methods with typed request and result objects; the contract is defined once and enforced by the conformance suite
 - **Multi-agent handoffs** — transfer context across authority boundaries without leaking full conversation history; the receiving agent gets a scoped context package, not the source session
+- **Policy-gated execution** — intercept model tool calls and route high-risk operations to human approval before any side effect occurs
 
 ---
 
@@ -208,7 +211,7 @@ Failure branches (stale approval, unknown outcome, expired, revised) are in [`sp
 
 ## Design goals
 
-Several products address governed agent execution. From documentation review, the closest are [AxonFlow](https://github.com/getaxonflow/axonflow) (BSL 1.1, broad enterprise platform), [JamJet](https://jamjet.dev) (Apache 2.0, "action-control plane for AI agents"), and [Tandem](https://tandem.ac) (authority and runtime model, enterprise focus). LangGraph and Temporal are complementary — better understood as integration targets than competitors.
+Several products address governed agent execution. From documentation review, the closest are [AxonFlow](https://github.com/getaxonflow/axonflow) (BSL 1.1, broad enterprise platform), [JamJet](https://jamjet.dev) (Apache 2.0, "action-control plane for AI agents"), and [Tandem](https://tandem.ac) (authority and runtime model, enterprise focus). LangGraph and Temporal are complementary — better understood as integration targets than competitors. See [`docs/competitive-matrix.md`](docs/competitive-matrix.md) and [`docs/competitor-notes/`](docs/competitor-notes/) for per-product research notes.
 
 This runtime is designed around a specific set of goals. We have not yet done hands-on testing to confirm which of these are genuinely absent from the closest products — that is the next stage of work (see [Status](#status)):
 
