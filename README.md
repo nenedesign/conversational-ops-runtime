@@ -32,38 +32,7 @@ The table-stakes capabilities (policy gating, human approval, audit trail) are p
 
 ---
 
-```mermaid
-flowchart LR
-    A[AI Agent\nClaude Sonnet 4.6] --> RL
-    T[External Trigger] --> RL
-
-    subgraph Runtime [Conversational AI Operations Runtime]
-        RL[Run Manager\nConversation Lifecycle]
-        PG[Policy Gate\nArgument Validation]
-        AG[Approval Gate\nStale Detection]
-        H[Human Approver]
-        CW[Command Worker\nBackground Dispatch]
-        HM[Handoff Manager\nAuthority Boundaries]
-        AL[(Audit Log\nAppend-only · Postgres)]
-
-        RL --> PG
-        RL --> HM
-        PG -->|low-risk| CW
-        PG -->|high-risk| AG
-        AG -->|awaiting| H
-        H -->|approved| AG
-        AG --> CW
-        PG --> AL
-        AG --> AL
-        CW --> AL
-    end
-
-    CW --> BS[Business Systems\nPayroll · HR · ERP]
-    HM --> TA[Specialist Agent\nBorder · Legal · Finance]
-
-    style Runtime fill:#f5f5f5,stroke:#1A1A2E,stroke-width:2px
-    style H fill:#1A1A2E,color:#ffffff,stroke:#1A1A2E
-```
+![Conversational AI Operations Runtime — Architecture](docs/architecture-diagram.svg)
 
 ---
 
