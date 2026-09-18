@@ -10,15 +10,20 @@
 
 ## How it compares
 
+The table-stakes capabilities — policy gating, human approval, audit trail — are present in comparable products. The bottom rows are where the design differs.
+
 | | This runtime | AxonFlow | JamJet | Tandem |
 |---|:-:|:-:|:-:|:-:|
 | License | Apache 2.0 | BSL 1.1 | Apache 2.0 | Proprietary |
-| Unknown outcome as first-class state | ✓ | ? | ? | ? |
-| Stale approval detection | ✓ | ? | ? | ? |
-| Typed provider adapter contract | ✓ | ? | ? | ? |
-| REST-first (no SDK required) | ✓ | ? | ? | ? |
+| Policy gating + human approval | ✓ | ✓ | ✓ | ✓ |
+| Append-only audit trail | ✓ | ✓ | – | – |
+| Self-hosted | ✓ | ✓ | ✓ | – |
+| **Unknown outcome as durable state** | **✓** | – | – | – |
+| **Stale approval detection** | **✓** | – | – | – |
+| **Typed domain adapter contract** | **✓** | – | – | – |
+| **REST-first (no SDK required)** | **✓** | – | – | – |
 
-`?` = not confirmed from documentation review. Hands-on testing pending.
+`–` = not documented in public sources. Based on documentation review; hands-on testing pending.
 
 [Full feature matrix](docs/competitive-matrix.md) · [Per-product notes](docs/competitor-notes/)
 
