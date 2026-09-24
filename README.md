@@ -40,7 +40,7 @@ The table-stakes capabilities (policy gating, human approval, audit trail) are p
 
 AI agents that modify business systems (payroll, booking, HR, ERP) need a layer between the model and the provider that handles: argument validation, policy evaluation, human approval, idempotent commit, unknown outcomes, and audit. Most teams build this for every integration point, duplicated and inconsistent.
 
-This runtime is that layer, built once, as a protocol, separate from the model.
+This runtime is that layer, built once, as a protocol, separate from the model. The model cannot authorize its own actions. AI augments workflow for human judgment. It does not replace it.
 
 ## Key capabilities
 
