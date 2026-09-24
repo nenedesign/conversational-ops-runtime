@@ -52,6 +52,19 @@ This runtime is that layer, built once, as a protocol, separate from the model. 
 
 ---
 
+## Forensic and investigative use
+
+The governance properties in this runtime apply directly to regulated investigation workflows, not only payroll and HR. Any workflow where an AI agent proposes actions against evidence, case records, or controlled data sets benefits from the same controls:
+
+- **Chain of custody**: the append-only event log (`GET /v1/runs/{id}/events`) records every proposal, approval, dispatch, and outcome in sequence with timestamps, actor IDs, and command references. The log cannot be modified after the fact.
+- **Stale approval detection**: if the underlying evidence record changes between when the agent prepared a proposal and when the human approved it, the approval is invalidated. The human re-reviews against current state.
+- **HITL gates for consequential actions**: any evidence classification, flag, or record modification routes to a human approval step before any side effect occurs.
+- **Unknown outcome handling**: if a commit does not return confirmed success, the runtime holds the command in `unknown` state and reconciles rather than assuming.
+
+See [ai-accountability-design-patterns](https://github.com/nenedesign/ai-accountability-design-patterns) for the accountability design framework this runtime implements.
+
+---
+
 ## Two layers
 
 ```text
