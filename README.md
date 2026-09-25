@@ -52,7 +52,7 @@ This runtime is that layer, built once, as a protocol, separate from the model. 
 
 ---
 
-## Forensic and investigative use
+## High-stakes and investigative use
 
 The governance properties in this runtime apply directly to regulated investigation workflows, not only payroll and HR. Any workflow where an AI agent proposes actions against evidence, case records, or controlled data sets benefits from the same controls:
 
